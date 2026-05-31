@@ -2171,6 +2171,5 @@ zrag/frontend/
 - 开发环境：`npm run dev`（Vite Dev Server localhost:5173）+ `python manage.py runserver`（localhost:8000），Vite proxy 转发 `/v1/*`
 
 ### 待确认
-- API Key 输入方式（设置入口 vs 首次弹窗）
 - Vue 项目初始化方式（手动创建 vs 实现阶段自动生成）
 
