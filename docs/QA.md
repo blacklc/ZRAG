@@ -1,7 +1,7 @@
 # ZRAG 项目设计对话记录
 
 > 生成日期: 2026-05-26
-> 最后更新: 2026-05-29
+> 最后更新: 2026-05-31
 > 参与人: 用户(lichen) + Claude
 >
 > **记录约定**: 当一个模块或重点环节设计完成后，须及时记录到本文件中。
@@ -1022,6 +1022,8 @@ def create_llm(config: dict) -> LLMProvider:
 │  │   ├── chunks 表         — 原文                                 │
 │  │   ├── chunks_fts 虚拟表 — FTS5 全文索引                         │
 │  │   └── processed_docs 表 — 处理进度（替代原 JSON 文件）           │
+│  │   ├── conversations 表 — 会话记录                              │
+│  │   └── messages 表 — 消息记录                                   │
 │  └── ChromaDB (data/chroma_db/)                                  │
 │       └── "zrag_docs" Collection — 向量 + source_id/source_type    │
 │                                                                  │
@@ -1052,7 +1054,7 @@ def create_llm(config: dict) -> LLMProvider:
 │                                                                  │
 │  ════════════ 对外接口（两种使用方式）═══════════                   │
 │                                                                  │
-│  ├── Web UI  ← DRF + Jinja2 + Vanilla JS + SSE 流式          │
+│  ├── Web UI  ← Vue 3 + Vite + Tailwind CSS（前后端分离）          │
 │  ├── RESTful API  ← DRF ViewSet + re_path                    │
 │  └── CLI  ← python -m zrag serve / ingest / query                │
 │                                                                  │
@@ -1068,13 +1070,14 @@ def create_llm(config: dict) -> LLMProvider:
 | Chunking 层 | `zrag/ingest/chunking/base.py`, `paragraph.py` |
 | Pipeline | `zrag/ingest/pipeline.py` |
 | SQLite 存储 | `zrag/store/sqlite_store.py` |
+| 会话存储 | `zrag.db`: conversations 表 + messages 表 |
 | ChromaDB 存储 | `zrag/store/vector_store.py` |
 | Embedding | `zrag/embed/base.py`, `local.py` |
 | 检索 + RRF | `zrag/retrieval/retriever.py` |
 | Prompt 构建 | `zrag/retrieval/prompt_builder.py` |
 | LLM 接口 | `zrag/llm/base.py`, `gateway.py`, `__init__.py` |
 | API | `zrag/api/views.py`, `serializers.py`, `urls.py`, `auth.py`, `response.py`, `middleware.py`, `exceptions.py`, `exception_handler.py`, `ingest_guard.py` |
-| Web UI | `zrag/web/` |
+| Web UI | `zrag/frontend/` (Vue 3 + Vite + Tailwind CSS) |
 | CLI | `zrag/cli/`, `zrag/__main__.py` |
 
 ### 已完成设计的模块
@@ -1094,6 +1097,9 @@ def create_llm(config: dict) -> LLMProvider:
 | Web UI | ⬜ |
 | CLI | ⬜ |
 | 配置文件 | ✅ |
+| 会话存储（conversations + messages） | ✅ |
+| 会话 API（5 个端点） | ✅ |
+| Web UI 方案（Vue + Tailwind） | ✅ |
 
 ---
 
@@ -1719,4 +1725,352 @@ Django 自身用 `data/django.db`（session/migration），业务数据用 `data
 | 模块 | 状态 |
 |------|:----:|
 | API 层（DRF） | ✅ |
+
+
+## Q31: 会话存储设计
+
+**用户**: 会话记录应该存在哪里？
+
+**决策**: 在已有 `zrag.db` 中新增两张表，复用 SQLite 存储层。
+
+### 表结构
+
+```sql
+CREATE TABLE conversations (
+    id         TEXT PRIMARY KEY,
+    title      TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE messages (
+    id              TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    role            TEXT NOT NULL,        -- 'user' | 'assistant'
+    content         TEXT NOT NULL,
+    sources         TEXT,                 -- JSON: [{"doc_title":"...","chunk_id":"..."}]
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+);
+
+CREATE INDEX idx_messages_conv_id ON messages(conversation_id);
+CREATE INDEX idx_messages_created ON messages(conversation_id, created_at);
+```
+
+### 关键决策
+
+| 决策点 | 结论 | 理由 |
+|--------|------|------|
+| updated_at 字段 | 删除 | 用子查询 `(SELECT MAX(m.created_at) FROM messages m WHERE m.conversation_id = c.id) AS last_msg_at` 获取最近消息时间，避免数据冗余和不一致 |
+| sources 字段存储内容 | 只存 `[{"doc_title":"...","chunk_id":"..."}]` | 前端渲染来源标注的最少信息。不存 chunk 原文，原文始终走 chunks 表 |
+| 模型名 | 不存 | UI 上的"当前模型"放前端状态管理 |
+| 删除级联 | 先 `DELETE FROM messages WHERE conversation_id = ?`，再 `DELETE FROM conversations WHERE id = ?` | 同一 SQLite 事务中 |
+| 数据库选型 | 使用已有 SQLite，不引入 NoSQL | 数据量小、结构固定、SQLite 足够 |
+
+---
+
+## Q32: 会话 API 设计
+
+**用户**: 需要支持会话的 CRUD 操作。
+
+### 端点汇总
+
+| 端点 | 方法 | 说明 |
+|------|:--:|------|
+| `POST /v1/conversations` | POST | 新建会话 + 首条问答 |
+| `POST /v1/conversations/{id}/messages` | POST | 在已有会话中继续问答 |
+| `GET /v1/conversations` | GET | 会话列表（含 total 总数，按最近消息时间倒序） |
+| `GET /v1/conversations/{id}/messages` | GET | 获取某会话的所有消息 |
+| `DELETE /v1/conversations/{id}` | DELETE | 删除会话及其所有消息（幂等） |
+
+> 流式端点（`/stream`）属于 Phase 2，暂不实现。
+
+### 核心设计决策
+
+| 决策点 | 结论 | 理由 |
+|--------|------|------|
+| 会话创建方式 | **方案 B** — 首条消息即创建会话 | 打开页面直接提问即可，无需"先创建空会话" |
+| 对话 ID 传递 | URL 路径参数 | RESTful 标准。本地工具无安全隐患 |
+| LLM 调用位置 | 数据库事务**外** | LLM 失败 → 零写入；LLM 成功 → 事务快速写入 |
+| 分页 | 不需要 | 个人工具数据量小 |
+| 对话总数 | `GET /v1/conversations` 返回 `{"total": N, "conversations": [...]}` | 前端需要显示总数和列表 |
+| 对话不存在 | `NotFoundException` → 404 | 给用户明确提示 |
+| DELETE 幂等 | 删除不存在的对话也返回成功 | 目标状态（资源不存在）已满足 |
+| sources 返回粒度 | 只返回 `doc_title` + `chunk_id` | 前端渲染来源标注所需的最少字段 |
+
+### 请求/响应示例
+
+**POST `/v1/conversations`**:
+```json
+// 请求
+{ "query": "什么是过拟合？", "model": "smart-router" }
+
+// 响应
+{
+  "Data": {
+    "conversation_id": "abc-123",
+    "title": "什么是过拟合？",
+    "answer": "过拟合是指模型在训练数据上表现很好但在测试数据上表现差的现象...",
+    "sources": [
+      {"doc_title": "机器学习笔记", "chunk_id": "xxx_chunk_3"}
+    ]
+  }
+}
+```
+
+**GET `/v1/conversations`**:
+```json
+{
+  "Data": {
+    "total": 23,
+    "conversations": [
+      {"id": "abc-123", "title": "什么是过拟合？", "created_at": "...", "last_msg_at": "..."}
+    ]
+  }
+}
+```
+
+### 代码实现
+
+**ChatSerializer**:
+```python
+class ChatSerializer(serializers.Serializer):
+    query = serializers.CharField(max_length=2000)
+    model = serializers.CharField(max_length=100, required=False, default="smart-router")
+```
+
+**NotFoundException**（新增异常类）:
+```python
+class NotFoundException(BaseZragException):
+    def __init__(self, message, error_code="NOT-FOUND"):
+        super().__init__(http_status=404, message=message, error_code=error_code)
+```
+
+**ConversationViewSet**:
+```python
+class ConversationViewSet(viewsets.ViewSet):
+
+    def create(self, request):
+        """POST /v1/conversations — 新建会话 + 首条问答"""
+        serializer = ChatSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        query = serializer.validated_data['query']
+        model = serializer.validated_data.get('model', 'smart-router')
+
+        # 1. RAG + LLM（事务外，失败则零副作用）
+        try:
+            results = get_retriever().hybrid_search(query, k=10)
+            prompt_messages = get_prompt_builder().build(query, results)
+            answer = get_llm_provider().chat(prompt_messages)
+        except Exception as e:
+            raise RetrievalException(str(e))
+
+        # 2. 事务写入：会话 + 用户消息 + AI 回复
+        sources_json = json.dumps([
+            {"doc_title": r.doc_title, "chunk_id": r.chunk_id} for r in results
+        ])
+        conv_id = str(uuid4())
+        now = datetime.utcnow().isoformat()
+        with sqlite_store.transaction() as db:
+            db.execute("INSERT INTO conversations (id, title, created_at) VALUES (?, ?, ?)",
+                       (conv_id, query[:50], now))
+            db.execute("INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+                       (str(uuid4()), conv_id, 'user', query, now))
+            db.execute("INSERT INTO messages (id, conversation_id, role, content, sources, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                       (str(uuid4()), conv_id, 'assistant', answer, sources_json, now))
+        return APIResponse(data={
+            "conversation_id": conv_id, "title": query[:50],
+            "answer": answer, "sources": json.loads(sources_json),
+        })
+
+    def send_message(self, request, conversation_id=None):
+        """POST /v1/conversations/{id}/messages — 继续对话"""
+        conv = sqlite_store.fetch_one("SELECT id FROM conversations WHERE id = ?", (conversation_id,))
+        if not conv:
+            raise NotFoundException(
+                message="Conversation not found: %s" % conversation_id,
+                error_code="CONVERSATION-NOT-FOUND")
+        serializer = ChatSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        query = serializer.validated_data['query']
+        model = serializer.validated_data.get('model', 'smart-router')
+        try:
+            results = get_retriever().hybrid_search(query, k=10)
+            prompt_messages = get_prompt_builder().build(query, results)
+            answer = get_llm_provider().chat(prompt_messages)
+        except Exception as e:
+            raise RetrievalException(str(e))
+        sources_json = json.dumps([
+            {"doc_title": r.doc_title, "chunk_id": r.chunk_id} for r in results
+        ])
+        now = datetime.utcnow().isoformat()
+        with sqlite_store.transaction() as db:
+            db.execute("INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+                       (str(uuid4()), conversation_id, 'user', query, now))
+            db.execute("INSERT INTO messages (id, conversation_id, role, content, sources, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                       (str(uuid4()), conversation_id, 'assistant', answer, sources_json, now))
+        return APIResponse(data={"answer": answer, "sources": json.loads(sources_json)})
+
+    def list(self, request):
+        """GET /v1/conversations"""
+        rows = sqlite_store.fetch_all("""
+            SELECT c.id, c.title, c.created_at,
+                   (SELECT MAX(m.created_at) FROM messages m WHERE m.conversation_id = c.id) AS last_msg_at
+            FROM conversations c ORDER BY last_msg_at DESC
+        """)
+        conversations = [{"id": r['id'], "title": r['title'], "created_at": r['created_at'], "last_msg_at": r['last_msg_at']} for r in rows]
+        return APIResponse(data={"total": len(conversations), "conversations": conversations})
+
+    def get_messages(self, request, conversation_id=None):
+        """GET /v1/conversations/{id}/messages"""
+        conv = sqlite_store.fetch_one("SELECT id FROM conversations WHERE id = ?", (conversation_id,))
+        if not conv:
+            raise NotFoundException(message="Conversation not found: %s" % conversation_id, error_code="CONVERSATION-NOT-FOUND")
+        rows = sqlite_store.fetch_all(
+            "SELECT id, role, content, sources, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at",
+            (conversation_id,))
+        messages = []
+        for r in rows:
+            msg = {"id": r['id'], "role": r['role'], "content": r['content'], "created_at": r['created_at']}
+            if r['sources']:
+                msg['sources'] = json.loads(r['sources'])
+            messages.append(msg)
+        return APIResponse(data={"messages": messages})
+
+    def destroy(self, request, conversation_id=None):
+        """DELETE /v1/conversations/{id} — 幂等删除"""
+        with sqlite_store.transaction() as db:
+            db.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
+            db.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+        return APIResponse(data={"deleted": conversation_id})
+```
+
+**路由**:
+```python
+# zrag/api/urls.py（与原 conversation_urls 合并）
+conversation_urls = [
+    re_path(r'^v1/conversations$', ConversationViewSet.as_view({'post': 'create', 'get': 'list'})),
+    re_path(r'^v1/conversations/(?P<conversation_id>[^/]+)/messages$',
+            ConversationViewSet.as_view({'post': 'send_message', 'get': 'get_messages'})),
+    re_path(r'^v1/conversations/(?P<conversation_id>[^/]+)$',
+            ConversationViewSet.as_view({'delete': 'destroy'})),
+]
+```
+
+---
+
+## Q33: Web UI 方案设计
+
+**用户**: Web UI 要前后端分离，使用 Vue 实现 Apple 风格 UI。对前端不熟悉，需要多提供备选方案。
+
+### 架构调整
+
+原架构总览中的 `Jinja2 + Vanilla JS` 改为前后端分离：
+
+```
+浏览器                             Django 后端
+┌──────────────────────────┐      ┌──────────────────┐
+│ Vue 3 + Vite             │ HTTP │ DRF              │
+│ ├─ Vue Router            │────→ │ ├─ REST API      │
+│ ├─ Tailwind CSS          │ SSE  │ └─ SSE (Phase 2) │
+│ └─ fetch / ReadableStream│←──── │                  │
+└──────────────────────────┘      └──────────────────┘
+```
+
+### 技术栈选型
+
+| 环节 | 方案 | 备选 | 理由 |
+|------|------|------|------|
+| 构建工具 | **Vite** | webpack | Vue 官方推荐，无争议 |
+| CSS | **Tailwind CSS** | Element Plus, Naive UI | Apple 风格（毛玻璃/大圆角/柔和阴影）用 Tailwind 内置类名最自然。组件库默认风格偏企业，覆写成本高 |
+| 图标库 | **Lucide Icons** | Heroicons | Apple 风格线性图标 |
+| 路由 | **Vue Router** | — | 官方配套 |
+| 状态管理 | **Vue 内置 reactive/ref** | Pinia | 场景简单，无需额外依赖 |
+| HTTP 请求 | **fetch** | axios | 浏览器内置，零依赖 |
+| Markdown 渲染 | **marked + highlight.js** | markdown-it | 轻量，代码高亮 |
+| SSE 流式（Phase 2）| **fetch + ReadableStream** | EventSource | EventSource 仅支持 GET，无法传 POST body |
+| UI 组件库 | **不使用** | Element Plus, Naive UI | Apple 风格极简，手写组件代码量小，不引入对抗式样式覆写 |
+
+### Apple 风格关键实现
+
+```css
+/* 毛玻璃导航栏 */
+nav { @apply bg-white/70 backdrop-blur-xl border-b border-gray-200/50; }
+
+/* 圆角卡片 */
+.card { @apply rounded-2xl shadow-sm bg-white; }
+
+/* SF 系统字体 */
+body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 
+       'Helvetica Neue', sans-serif; }
+
+/* 输入框 */
+input { @apply rounded-xl border border-gray-200 bg-gray-50/50 
+              focus:bg-white focus:ring-2 focus:ring-blue-500/20; }
+```
+
+### 页面设计
+
+**聊天主页 `/`**：
+- 左侧：会话历史列表（切换、删除，按最近消息时间排序）
+- 中间：消息列表（AI 消息带 Markdown 渲染 + 来源标注）
+- 底部：输入框 + 发送按钮 + 模型选择器
+- 顶部：毛玻璃导航栏（聊天 / 源管理入口）
+
+**源管理 `/sources`**：
+- 源状态卡片 + 触发摄入按钮 + 最近导入记录
+
+### 文件结构
+
+```
+zrag/frontend/
+├── index.html
+├── package.json
+├── vite.config.js
+├── src/
+│   ├── main.js
+│   ├── App.vue
+│   ├── router/index.js
+│   ├── api/index.js            # fetch 封装 + API 调用
+│   ├── views/
+│   │   ├── ChatView.vue
+│   │   └── SourcesView.vue
+│   ├── components/
+│   │   ├── NavBar.vue          # 毛玻璃导航栏
+│   │   ├── ChatInput.vue       # 输入框 + 模型选择器
+│   │   ├── ChatMessage.vue     # 消息气泡 + Markdown 渲染
+│   │   ├── ChatSidebar.vue     # 历史对话列表
+│   │   └── SourceCard.vue      # 源状态卡片
+│   ├── composables/
+│   │   ├── useChat.js          # 聊天逻辑
+│   │   └── useConversation.js  # 对话管理
+│   └── assets/
+│       └── style.css
+```
+
+### 依赖
+
+```json
+{
+  "dependencies": {
+    "vue": "^3.4",
+    "vue-router": "^4.3",
+    "marked": "^12.0",
+    "highlight.js": "^11.9"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0",
+    "vite": "^5.4",
+    "tailwindcss": "^3.4"
+  }
+}
+```
+
+### 开发部署
+
+- 开发时：`python manage.py runserver` + `npm run dev`（Vite proxy 转发 `/v1/*` 到 Django）
+- 部署时：`npm run build` → `dist/` 静态文件
+
+### 待确认
+- API Key 输入方式（设置入口 vs 首次弹窗）
+- Vue 项目初始化方式（手动创建 vs 实现阶段自动生成）
 
