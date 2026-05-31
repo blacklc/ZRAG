@@ -1,7 +1,7 @@
 # ZRAG 项目设计对话记录
 
 > 生成日期: 2026-05-26
-> 最后更新: 2026-06-01
+> 最后更新: 2026-06-02
 > 参与人: 用户(lichen) + Claude
 >
 > **记录约定**: 当一个模块或重点环节设计完成后，须及时记录到本文件中。
@@ -1111,7 +1111,17 @@ def create_llm(config: dict) -> LLMProvider:
 | Web UI — 源管理页（不定进度条 + 全量/增量导入 + IngestReport 刷新） | ✅ |
 | Web UI — Vue Router History 模式 + 响应式布局 | ✅ |
 | Web UI — API 错误处理（Toast + 红色气泡） | ✅ |
-| 部署架构 — 三容器方案（Nginx + Frontend + Backend） | ✅ |
+| 部署 — Docker 三容器方案 + docker-compose | ✅ |
+| 部署 — 启动顺序（health check + depends_on） | ✅ |
+| 部署 — 资源限制 + 日志轮转 + 重启策略 | ✅ |
+| 部署 — 环境变量管理（.env + docker-compose） | ✅ |
+| 部署 — Django 配置（DEBUG/ALLOWED_HOSTS/SECRET_KEY/时区） | ✅ |
+| 部署 — uWSGI（1 worker + 180s harakiri） | ✅ |
+| 部署 — Nginx 代理超时 + gzip | ✅ |
+| 部署 — entrypoint.sh（migrate + init_zrag_db + collectstatic） | ✅ |
+| 部署 — 业务日志（stdout + volume 持久化） + 前端日志（docker logs） | ✅ |
+| 部署 — Embedding 模型（宿主机预下载 + 只读 volume） | ✅ |
+| 部署 — 端口（8080 对外 + 5965 内部） | ✅ |
 
 ---
 
@@ -2173,3 +2183,318 @@ zrag/frontend/
 ### 待确认
 - Vue 项目初始化方式（手动创建 vs 实现阶段自动生成）
 
+
+---
+
+## Q34: 部署与运维设计
+
+**用户**: 部署方式是什么？需要 CI/CD 吗？
+
+**决策**: 本机 Docker Desktop，三容器方案，不需要 CI/CD。手动 `docker compose build && up -d` 更新。
+
+**用户**: 三容器之间怎么通信？
+
+**决策**: docker-compose 默认创建网络，容器名即主机名。Nginx 通过 `proxy_pass http://backend:5965` 和 `proxy_pass http://frontend:80` 转发。Backend 不对外暴露端口（仅 expose），Frontend 同理，只有 Nginx 将 8080 映射到宿主机（避免 80 端口冲突）。
+
+### 容器架构
+
+```
+┌──────────────────────────────────────────┐
+│  Nginx (8080→80, 唯一对外入口)             │
+│    ├── /     → Frontend (内部 80)          │
+│    └── /v1/* → Backend (内部 5965)         │
+├──────────────────────────────────────────┤
+│  Frontend (expose 80)                    │
+│    └── nginx:alpine + dist/              │
+├──────────────────────────────────────────┤
+│  Backend (expose 5965)                   │
+│    ├── uWSGI + Django                    │
+│    ├── volumes: data/, models/, logs/    │
+│    └── entrypoint.sh                     │
+└──────────────────────────────────────────┘
+```
+
+### docker-compose.yml
+
+```yaml
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.5"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    expose:
+      - "80"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.5"
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    expose:
+      - "5965"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models:ro
+      - ./logs:/app/log
+    environment:
+      - LLM_GATEWAY_URL=${LLM_GATEWAY_URL}
+      - LLM_GATEWAY_MODEL=${LLM_GATEWAY_MODEL}
+      - ZRAG_API_KEY=${ZRAG_API_KEY}
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
+      - DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS:-localhost}
+      - DJANGO_TIME_ZONE=${DJANGO_TIME_ZONE:-Asia/Shanghai}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5965/v1/health/live"]
+      interval: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "2"
+```
+
+### .env 文件
+
+```bash
+ZRAG_API_KEY=sk-xxxx
+LLM_GATEWAY_URL=http://host.docker.internal:4000/v1
+LLM_GATEWAY_MODEL=smart-router
+DJANGO_SECRET_KEY=<python -c "import secrets; print(secrets.token_urlsafe(50))">
+DJANGO_DEBUG=False
+DJANGO_ALLOWED_HOSTS=localhost
+DJANGO_TIME_ZONE=Asia/Shanghai
+```
+
+### entrypoint.sh
+
+```bash
+#!/bin/sh
+set -e
+python manage.py migrate --no-input
+python manage.py init_zrag_db --no-input
+python manage.py collectstatic --no-input
+exec "$@"
+```
+
+### nginx.conf
+
+```nginx
+server {
+    listen 80;
+    gzip on;
+    gzip_types text/css application/javascript;
+
+    location / {
+        proxy_pass http://frontend:80;
+        proxy_set_header Host $host;
+    }
+
+    location /v1/ {
+        proxy_pass http://backend:5965;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_read_timeout 180s;
+        proxy_connect_timeout 10s;
+    }
+}
+```
+
+### uwsgi.ini
+
+```ini
+[uwsgi]
+module = zrag.wsgi:application
+master = true
+processes = 1
+http = 0.0.0.0:5965
+harakiri = 180
+vacuum = true
+```
+
+### Dockerfile.backend
+
+```dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential gcc curl && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY zrag/ ./zrag/
+COPY config/ ./config/
+COPY manage.py .
+COPY uwsgi.ini .
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
+
+EXPOSE 5965
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["uwsgi", "--ini", "/app/uwsgi.ini"]
+```
+
+### Dockerfile.frontend
+
+```dockerfile
+FROM node:22-alpine AS builder
+WORKDIR /src
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+ARG VITE_API_KEY
+ENV VITE_API_KEY=$VITE_API_KEY
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=builder /src/dist/ /usr/share/nginx/html/
+EXPOSE 80
+```
+
+### .dockerignore
+
+```
+node_modules/
+.git/
+data/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.DS_Store
+*.log
+models/
+logs/
+```
+
+### Embedding 模型管理
+
+部署前宿主机预下载模型：
+
+```bash
+pip install sentence-transformers
+python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-zh-v1.5', cache_folder='./models')"
+```
+
+容器通过只读 volume 加载：
+
+```yaml
+volumes:
+  - ./models:/app/models:ro
+```
+
+配置指定路径：
+
+```yaml
+# config/embedding.yaml
+embedding:
+  model_name: "BAAI/bge-small-zh-v1.5"
+  cache_dir: "/app/models"
+```
+
+### 启动流程
+
+```bash
+# 首次部署
+# 1. 预下载模型
+pip install sentence-transformers
+python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-zh-v1.5', cache_folder='./models')"
+
+# 2. 创建 .env 并填入配置
+# 3. 启动
+docker compose up -d
+
+# 更新代码后
+docker compose build backend && docker compose up -d     # 只改后端
+docker compose build frontend && docker compose up -d    # 只改前端
+docker compose build && docker compose up -d             # 全部重建
+```
+
+### 日志管理
+
+| 日志类型 | 处理方式 |
+|----------|---------|
+| uWSGI 访问/错误日志 | stdout/stderr → docker logs |
+| Django 业务日志 | stdout + volume `./logs:/app/log` 持久化 |
+| Nginx 入口日志 | stdout → docker logs |
+| Frontend Nginx 日志 | stdout → docker logs |
+| Vue 客户端 JS 错误 | 浏览器 console，服务端不管理 |
+| 日志轮转 | json-file, 10MB × 3 file |
+
+### 运维决策汇总
+
+| 决策项 | 结论 |
+|--------|------|
+| 部署目标 | 本机 Docker Desktop |
+| CI/CD | 不需要，手动构建更新 |
+| 容器架构 | 三容器：Nginx + Frontend + Backend |
+| 对外端口 | 8080（避免 80 冲突） |
+| Backend 端口 | 5965（内部 expose） |
+| 启动顺序 | health check + depends_on，Frontend 和 Backend 就绪后 Nginx 才接受请求 |
+| WSGI Server | uWSGI（与 zonebank 一致） |
+| Worker 数量 | 1（个人工具，无并发需求） |
+| Harakiri 超时 | 180 秒（LLM 调用可能慢） |
+| Nginx 代理 | proxy_read_timeout 180s, proxy_connect_timeout 10s |
+| 环境变量 | .env 文件 + docker-compose `${VAR}` 引用 |
+| Django DEBUG | .env 控制，默认 False |
+| ALLOWED_HOSTS | .env 控制，默认 localhost |
+| SECRET_KEY | .env 管理，`secrets.token_urlsafe(50)` 生成 |
+| 时区 | Asia/Shanghai |
+| 数据库迁移 | entrypoint.sh 自动执行 migrate + init_zrag_db |
+| 静态文件 | entrypoint.sh 自动执行 collectstatic |
+| 日志限制 | json-file，10MB × 3 |
+| 重启策略 | unless-stopped |
+| 资源限制 | Backend 512M/2CPU，Frontend 64M/0.5CPU，Nginx 64M/0.5CPU |
+| 业务日志 | stdout + volume 持久化到 ./logs/ |
+| 前端日志 | 全部 stdout → docker logs |
+| Docker 网络 | compose 默认自动管理 |
+| 数据持久化 | ./data:/app/data（zrag.db + chroma_db + django.db） |
+| 模型管理 | 宿主机预下载 → ./models:/app/models:ro |
+| 镜像更新 | docker compose build \<service\> && docker compose up -d |
+| Gunicorn | 替换为 uWSGI（用户指定） |
