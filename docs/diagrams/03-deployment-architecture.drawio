@@ -1,0 +1,91 @@
+<mxGraphModel adaptiveColors="auto">
+  <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+
+    <mxCell id="host" value="Docker 宿主机 (macOS)" style="swimlane;startSize=30;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;html=1;" vertex="1" parent="1">
+      <mxGeometry x="0" y="0" width="900" height="620" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="nginx-ctr" value="Nginx 容器 (8080→80)" style="swimlane;startSize=24;fillColor=#dae8fc;strokeColor=#6c8ebf;html=1;fontStyle=1;" vertex="1" parent="host">
+      <mxGeometry x="40" y="50" width="820" height="130" as="geometry"/>
+    </mxCell>
+    <mxCell id="nginx-proxy" value="反向代理 + gzip" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;fontStyle=1;" vertex="1" parent="nginx-ctr">
+      <mxGeometry x="50" y="30" width="160" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="nginx-rule1" value="/ → Frontend:80" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;" vertex="1" parent="nginx-ctr">
+      <mxGeometry x="260" y="30" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="nginx-rule2" value="/v1/* → Backend:5965&#xa;(proxy_read_timeout 180s)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;" vertex="1" parent="nginx-ctr">
+      <mxGeometry x="510" y="30" width="260" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="nginx-port" value="宿主端口: 8080" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;fontStyle=1;" vertex="1" parent="nginx-ctr">
+      <mxGeometry x="310" y="80" width="180" height="30" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="frontend-ctr" value="Frontend 容器 (expose 80)" style="swimlane;startSize=24;fillColor=#e8f5e9;strokeColor=#82b366;html=1;fontStyle=1;" vertex="1" parent="host">
+      <mxGeometry x="40" y="210" width="390" height="130" as="geometry"/>
+    </mxCell>
+    <mxCell id="fe-nginx" value="nginx:alpine" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;fontStyle=1;" vertex="1" parent="frontend-ctr">
+      <mxGeometry x="30" y="30" width="140" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="fe-dist" value="dist/ (Vue 构建产物)&#xa;index.html + assets/" style="shape=mxgraph.flowchart.document;whiteSpace=wrap;html=1;fillColor=#d5e8d4;" vertex="1" parent="frontend-ctr">
+      <mxGeometry x="200" y="25" width="160" height="55" as="geometry"/>
+    </mxCell>
+    <mxCell id="fe-health" value="healthcheck: curl /" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;" vertex="1" parent="frontend-ctr">
+      <mxGeometry x="80" y="80" width="200" height="30" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="backend-ctr" value="Backend 容器 (expose 5965)" style="swimlane;startSize=24;fillColor=#fff0e6;strokeColor=#d6b656;html=1;fontStyle=1;" vertex="1" parent="host">
+      <mxGeometry x="470" y="210" width="390" height="130" as="geometry"/>
+    </mxCell>
+    <mxCell id="be-uwsgi" value="uWSGI (1 worker)&#xa;harakiri: 180s" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;fontStyle=1;" vertex="1" parent="backend-ctr">
+      <mxGeometry x="30" y="30" width="150" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="be-django" value="Django DRF&#xa;API + Embedding" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;fontStyle=1;" vertex="1" parent="backend-ctr">
+      <mxGeometry x="210" y="30" width="150" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="be-entrypoint" value="entrypoint.sh: migrate → init → collectstatic → uwsgi" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;" vertex="1" parent="backend-ctr">
+      <mxGeometry x="30" y="85" width="330" height="30" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="volumes-container" value="数据卷 (Volume 挂载)" style="swimlane;startSize=24;fillColor=#e6e6ff;strokeColor=#7ea6e0;html=1;fontStyle=1;" vertex="1" parent="host">
+      <mxGeometry x="40" y="370" width="820" height="120" as="geometry"/>
+    </mxCell>
+    <mxCell id="vol-data" value="./data:/app/data&#xa;(zrag.db + chroma_db/)" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#dae8fc;" vertex="1" parent="volumes-container">
+      <mxGeometry x="30" y="25" width="200" height="70" as="geometry"/>
+    </mxCell>
+    <mxCell id="vol-models" value="./models:/app/models:ro&#xa;(bge-small-zh-v1.5)" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#dae8fc;" vertex="1" parent="volumes-container">
+      <mxGeometry x="260" y="25" width="210" height="70" as="geometry"/>
+    </mxCell>
+    <mxCell id="vol-logs" value="./logs:/app/log&#xa;(业务日志持久化)" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#dae8fc;" vertex="1" parent="volumes-container">
+      <mxGeometry x="500" y="25" width="200" height="70" as="geometry"/>
+    </mxCell>
+    <mxCell id="vol-env" value=".env 环境变量" style="shape=mxgraph.flowchart.document;whiteSpace=wrap;html=1;fillColor=#dae8fc;" vertex="1" parent="volumes-container">
+      <mxGeometry x="730" y="35" width="70" height="50" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="litellm-ext" value="外部服务: LiteLLM Gateway" style="swimlane;startSize=24;fillColor=#fff9e6;strokeColor=#d6b656;html=1;fontStyle=1;" vertex="1" parent="host">
+      <mxGeometry x="40" y="520" width="820" height="70" as="geometry"/>
+    </mxCell>
+    <mxCell id="litellm-svc" value="LiteLLM Gateway (localhost:4000/v1)&#xa;smart-router | glm-5 | kimi-k2.6 | deepseek-v4 | minimax-m2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;fontStyle=1;" vertex="1" parent="litellm-ext">
+      <mxGeometry x="120" y="10" width="580" height="45" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="e-n-fe" edge="1" parent="host" source="nginx-rule1" target="fe-nginx" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e-n-be" edge="1" parent="host" source="nginx-rule2" target="be-uwsgi" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e-be-litellm" edge="1" parent="host" source="be-django" target="litellm-svc" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;dashed=1;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e-vol1" edge="1" parent="host" source="be-django" target="vol-data" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;dashed=1;strokeColor=#7ea6e0;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e-vol2" edge="1" parent="host" source="be-django" target="vol-models" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;dashed=1;strokeColor=#7ea6e0;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+  </root>
+</mxGraphModel>

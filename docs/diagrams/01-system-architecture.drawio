@@ -1,0 +1,123 @@
+<mxGraphModel adaptiveColors="auto">
+  <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+
+    <mxCell id="outer" value="ZRAG 系统整体架构" style="swimlane;startSize=30;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;html=1;" vertex="1" parent="1">
+      <mxGeometry x="0" y="0" width="900" height="640" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="webui-container" value="Web UI 层 (Vue 3 + Vite + Tailwind CSS)" style="swimlane;startSize=24;fillColor=#e8f4f8;strokeColor=#6c8ebf;html=1;fontStyle=1;" vertex="1" parent="outer">
+      <mxGeometry x="20" y="40" width="860" height="90" as="geometry"/>
+    </mxCell>
+    <mxCell id="chat-page" value="聊天主页 /" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;html=1;" vertex="1" parent="webui-container">
+      <mxGeometry x="30" y="28" width="160" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="sources-page" value="源管理 /sources" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;html=1;" vertex="1" parent="webui-container">
+      <mxGeometry x="220" y="28" width="160" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="vue-features" value="深色模式 | SSE(Phase 2) | Markdown | 代码高亮" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;html=1;" vertex="1" parent="webui-container">
+      <mxGeometry x="420" y="28" width="410" height="50" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="api-container" value="API 层 (Django REST Framework)" style="swimlane;startSize=24;fillColor=#fff0e6;strokeColor=#d6b656;html=1;fontStyle=1;" vertex="1" parent="outer">
+      <mxGeometry x="20" y="140" width="860" height="90" as="geometry"/>
+    </mxCell>
+    <mxCell id="auth" value="API Key 认证" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;html=1;" vertex="1" parent="api-container">
+      <mxGeometry x="30" y="28" width="120" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="rate-limit" value="速率限制" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;html=1;" vertex="1" parent="api-container">
+      <mxGeometry x="170" y="28" width="100" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="exception" value="异常处理" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;html=1;" vertex="1" parent="api-container">
+      <mxGeometry x="290" y="28" width="100" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="conv-api" value="会话 API (5端点)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;html=1;" vertex="1" parent="api-container">
+      <mxGeometry x="410" y="28" width="160" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="ingest-api" value="摄入 API" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;html=1;" vertex="1" parent="api-container">
+      <mxGeometry x="590" y="28" width="110" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="health-api" value="健康检查" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;html=1;" vertex="1" parent="api-container">
+      <mxGeometry x="720" y="28" width="110" height="50" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="core-container" value="核心业务层" style="swimlane;startSize=24;fillColor=#e8f5e9;strokeColor=#82b366;html=1;fontStyle=1;" vertex="1" parent="outer">
+      <mxGeometry x="20" y="240" width="860" height="160" as="geometry"/>
+    </mxCell>
+    <mxCell id="ingestion" value="IngestionPipeline&#xa;(Source → Chunk → Embed → Store)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;html=1;" vertex="1" parent="core-container">
+      <mxGeometry x="30" y="28" width="260" height="55" as="geometry"/>
+    </mxCell>
+    <mxCell id="retrieval" value="Retriever&#xa;(Hybrid Search + RRF)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;html=1;" vertex="1" parent="core-container">
+      <mxGeometry x="320" y="28" width="200" height="55" as="geometry"/>
+    </mxCell>
+    <mxCell id="llm" value="LLM Provider&#xa;(LiteLLM Gateway)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;html=1;" vertex="1" parent="core-container">
+      <mxGeometry x="550" y="28" width="190" height="55" as="geometry"/>
+    </mxCell>
+    <mxCell id="embedding" value="Embedding&#xa;(bge-small-zh-v1.5)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;html=1;" vertex="1" parent="core-container">
+      <mxGeometry x="120" y="100" width="180" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="prompt-builder" value="PromptBuilder" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;html=1;" vertex="1" parent="core-container">
+      <mxGeometry x="370" y="100" width="140" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="chunking" value="ChunkingStrategy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;html=1;" vertex="1" parent="core-container">
+      <mxGeometry x="560" y="100" width="160" height="50" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="storage-container" value="存储层" style="swimlane;startSize=24;fillColor=#fff9e6;strokeColor=#d6b656;html=1;fontStyle=1;" vertex="1" parent="outer">
+      <mxGeometry x="20" y="410" width="860" height="90" as="geometry"/>
+    </mxCell>
+    <mxCell id="sqlite" value="SQLite (zrag.db)&#xa;chunks + FTS5 + conversations" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#fff2cc;html=1;" vertex="1" parent="storage-container">
+      <mxGeometry x="120" y="18" width="200" height="65" as="geometry"/>
+    </mxCell>
+    <mxCell id="chromadb" value="ChromaDB&#xa;(chroma_db/)" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#fff2cc;html=1;" vertex="1" parent="storage-container">
+      <mxGeometry x="500" y="18" width="180" height="65" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="source-container" value="外部数据源" style="swimlane;startSize=24;fillColor=#fce4ec;strokeColor=#e57373;html=1;fontStyle=1;" vertex="1" parent="outer">
+      <mxGeometry x="20" y="510" width="410" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="mac-notes" value="macOS Notes (AppleScript)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;html=1;" vertex="1" parent="source-container">
+      <mxGeometry x="60" y="22" width="280" height="45" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="external-container" value="外部服务" style="swimlane;startSize=24;fillColor=#e6e6ff;strokeColor=#7ea6e0;html=1;fontStyle=1;" vertex="1" parent="outer">
+      <mxGeometry x="450" y="510" width="430" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="litellm-gw" value="LiteLLM Gateway (:4000)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;html=1;" vertex="1" parent="external-container">
+      <mxGeometry x="60" y="22" width="300" height="45" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="cfg" value="配置文件 (config/*.yaml)" style="shape=mxgraph.flowchart.document;whiteSpace=wrap;html=1;fillColor=#e1d5e7;html=1;" vertex="1" parent="outer">
+      <mxGeometry x="680" y="520" width="170" height="55" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="e-wui-api" edge="1" parent="outer" source="chat-page" target="conv-api" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e-api-ingest" edge="1" parent="outer" source="conv-api" target="ingestion" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e-api-retrieve" edge="1" parent="outer" source="conv-api" target="retrieval" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e-retrieve-storage" edge="1" parent="outer" source="retrieval" target="sqlite" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;dashed=1;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e-retrieve-chroma" edge="1" parent="outer" source="retrieval" target="chromadb" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;dashed=1;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e-embed-retrieve" edge="1" parent="outer" source="embedding" target="retrieval" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e-ingest-storage" edge="1" parent="outer" source="ingestion" target="sqlite" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e-llm-gw" edge="1" parent="outer" source="llm" target="litellm-gw" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+    <mxCell id="e-source-ingest" edge="1" parent="outer" source="mac-notes" target="ingestion" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=classic;">
+      <mxGeometry relative="1" as="geometry"/>
+    </mxCell>
+  </root>
+</mxGraphModel>
