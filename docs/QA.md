@@ -1,7 +1,7 @@
 # ZRAG 项目设计对话记录
 
 > 生成日期: 2026-05-26
-> 最后更新: 2026-05-31
+> 最后更新: 2026-06-01
 > 参与人: 用户(lichen) + Claude
 >
 > **记录约定**: 当一个模块或重点环节设计完成后，须及时记录到本文件中。
@@ -1100,6 +1100,18 @@ def create_llm(config: dict) -> LLMProvider:
 | 会话存储（conversations + messages） | ✅ |
 | 会话 API（5 个端点） | ✅ |
 | Web UI 方案（Vue + Tailwind） | ✅ |
+| Web UI — 深色模式（手动切换 + localStorage + highlight.js 跟随） | ✅ |
+| Web UI — 键盘快捷键（Enter/Shift+Enter/Cmd+K/Cmd+/） | ✅ |
+| Web UI — API Key（构建时注入） | ✅ |
+| Web UI — 输入框（自动扩展 textarea） | ✅ |
+| Web UI — 加载状态 + 空状态 + 消息滚动 | ✅ |
+| Web UI — 消息气泡（复制 + 来源标注） | ✅ |
+| Web UI — 删除确认弹窗 + 删除后跳转空状态 | ✅ |
+| Web UI — 代码高亮（浅色/深色跟随主题） + 404 + Favicon | ✅ |
+| Web UI — 源管理页（不定进度条 + 全量/增量导入 + IngestReport 刷新） | ✅ |
+| Web UI — Vue Router History 模式 + 响应式布局 | ✅ |
+| Web UI — API 错误处理（Toast + 红色气泡） | ✅ |
+| 部署架构 — 三容器方案（Nginx + Frontend + Backend） | ✅ |
 
 ---
 
@@ -2069,6 +2081,94 @@ zrag/frontend/
 
 - 开发时：`python manage.py runserver` + `npm run dev`（Vite proxy 转发 `/v1/*` 到 Django）
 - 部署时：`npm run build` → `dist/` 静态文件
+
+### 细化设计决策
+
+以下是在 grill-me 流程中逐一确认的全部 Web UI 细节：
+
+**深色模式**:
+- 手动切换（方案 C），切换按钮 → 导航栏右侧 ☀️/🌙 图标
+- 用户偏好存 localStorage，下次打开自动恢复
+- 深色模式切换时，highlight.js 代码高亮主题跟随切换：浅色 → `github`，深色 → `github-dark`
+
+**键盘快捷键**:
+- `Enter` — 发送消息
+- `Shift + Enter` — 换行
+- `Cmd + K` — 新建对话
+- `Cmd + /` — 聚焦输入框
+
+**API Key**:
+- 方案 A：构建时注入。`.env` 文件 `VITE_API_KEY=sk-xxxx`，Vite 构建时将 `import.meta.env.VITE_API_KEY` 替换为字面量
+- 前端 JS 代码直接使用，无需用户手动输入
+
+**输入框**:
+- textarea 初始单行，内容多了自动增高（max 6 行）
+- 占位符："向你的知识库提问"
+
+**AI 回复加载状态**:
+- 三个跳动的圆点（类似 ChatGPT 打字指示器），发完消息后显示，AI 回复返回后替换为实际内容
+
+**首次打开/空状态**:
+- 无对话时聊天区中间显示 ZRAG 标志 + "向你的知识库提问"
+- 左侧会话列表为空时灰色小字"暂无对话，开始提问吧"
+- 打开页面时显示空状态（不自动选中任何对话）
+
+**消息气泡**:
+- AI 消息右上角悬浮复制按钮
+- AI 消息下方来源标注：`📎 来源: 机器学习笔记、深度学习入门`（方案 A 文字链接，灰字小号，来源只展示 doc_title）
+- 点击来源暂不实现
+
+**消息滚动**:
+- 新消息/AI 回复时自动 scrollToBottom
+- 用户手动上滚查看历史时不强制跳回
+
+**删除对话**:
+- 悬停显示删除按钮 → 弹出确认弹窗"确定删除此对话？"
+- 确认删除后：如果删除的是当前正在查看的对话 → 跳转到空状态（方案 A）
+
+**代码高亮**:
+- marked.js 渲染 Markdown，highlight.js 做代码块语法高亮
+- 深色/浅色模式切换时自动切换高亮主题
+
+**404 页面**:
+- Vue Router 兜底路由 `/:pathMatch(.*)*` → Apple 风格极简 404 组件（方案 B）
+
+**Favicon**:
+- 极简 SVG 或 📚 emoji 作为标签页图标（方案 B）
+
+**浏览器标题**:
+- 固定显示 "ZRAG"（方案 A）
+
+**Vue Router 模式**:
+- History 模式，URL 干净无 `#`，Nginx `try_files $uri /index.html`
+
+**响应式布局**:
+- 桌面端标准布局，移动端侧边栏可折叠、消息区弹性宽度（方案 B）
+
+**源管理页交互**:
+- 两个按钮："增量导入" + "全量导入"（方案 A）
+- 全量导入：请求 `{"source_type": "mac_notes", "full": true}`，后端清空该 source_type 的 processed_docs 后重新处理
+- 点击后显示不确定进度条（Apple 风格灰色流动条纹，方案 A）
+- 摄入完成后用 IngestReport 直接更新 UI，失败时回退调 `GET /v1/sources`（方案 B + 兜底 A）
+
+**API 调用失败处理**:
+- 网络断/500 → Toast 通知（右上角短暂弹出）
+- 对话相关错误 → 红色消息气泡插入聊天区
+
+**设置面板**:
+- 不需要。导航栏只放 ☀️/🌙 切换和 📊 源管理入口
+
+**消息复制**:
+- 气泡右上角悬浮复制图标，点击复制整条消息
+
+### 部署架构
+
+**三容器方案**（Nginx + Frontend + Backend）:
+- Nginx 容器（80:80，唯一对外入口）→ `/` 代理到 Frontend 容器（内部 80，expose），`/v1/*` 代理到 Backend 容器（内部 5965，expose）
+- Frontend 容器：`nginx:alpine + dist/`
+- Backend 容器：`gunicorn :5965`
+- 生产环境：`npm run build` → dist/ 打进 Frontend 镜像 → 容器化部署
+- 开发环境：`npm run dev`（Vite Dev Server localhost:5173）+ `python manage.py runserver`（localhost:8000），Vite proxy 转发 `/v1/*`
 
 ### 待确认
 - API Key 输入方式（设置入口 vs 首次弹窗）
