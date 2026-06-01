@@ -1118,7 +1118,7 @@ def create_llm(config: dict) -> LLMProvider:
 | 部署 — Django 配置（DEBUG/ALLOWED_HOSTS/SECRET_KEY/时区） | ✅ |
 | 部署 — uWSGI（1 worker + 180s harakiri） | ✅ |
 | 部署 — Nginx 代理超时 + gzip | ✅ |
-| 部署 — entrypoint.sh（migrate + init_zrag_db + collectstatic） | ✅ |
+| 部署 — entrypoint.sh（migrate → collectstatic → uwsgi，建表由 AppConfig.ready() 自动完成） | ✅ |
 | 部署 — 业务日志（stdout + volume 持久化） + 前端日志（docker logs） | ✅ |
 | 部署 — Embedding 模型（宿主机预下载 + 只读 volume） | ✅ |
 | 部署 — 端口（8080 对外 + 5965 内部） | ✅ |
@@ -2314,10 +2314,11 @@ DJANGO_TIME_ZONE=Asia/Shanghai
 #!/bin/sh
 set -e
 python manage.py migrate --no-input
-python manage.py init_zrag_db --no-input
 python manage.py collectstatic --no-input
 exec "$@"
 ```
+
+> 建表初始化（`CREATE TABLE IF NOT EXISTS`）由 AppConfig.ready() 自动执行，无需 management command。
 
 ### nginx.conf
 
@@ -2486,7 +2487,7 @@ docker compose build && docker compose up -d             # 全部重建
 | ALLOWED_HOSTS | .env 控制，默认 localhost |
 | SECRET_KEY | .env 管理，`secrets.token_urlsafe(50)` 生成 |
 | 时区 | Asia/Shanghai |
-| 数据库迁移 | entrypoint.sh 自动执行 migrate + init_zrag_db |
+| 数据库迁移 | entrypoint.sh 自动执行 migrate，建表由 AppConfig.ready() 自动完成（`CREATE TABLE IF NOT EXISTS`） |
 | 静态文件 | entrypoint.sh 自动执行 collectstatic |
 | 日志限制 | json-file，10MB × 3 |
 | 重启策略 | unless-stopped |

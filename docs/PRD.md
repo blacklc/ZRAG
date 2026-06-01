@@ -163,7 +163,7 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 - 模型挂载：./models:/app/models:ro（只读）
 - 日志持久化：./logs:/app/log（业务日志）
 - 环境变量：.env 文件 + docker-compose ${VAR} 引用
-- entrypoint.sh：migrate → init_zrag_db → collectstatic → uwsgi
+- entrypoint.sh：migrate → collectstatic → uwsgi（建表由 AppConfig.ready() 自动执行 `CREATE TABLE IF NOT EXISTS`）
 - 健康检查：Frontend（curl /）、Backend（curl /v1/health/live）
 - 资源限制：Backend 512M/2CPU，Frontend 64M/0.5CPU，Nginx 64M/0.5CPU
 - 日志轮转：json-file driver，10MB × 3 文件
