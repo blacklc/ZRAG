@@ -25,10 +25,15 @@
 
 | # | 切片名称 | 类型 | 依赖 |
 |---|---------|:--:|------|
-| 2 | SQLiteStore — 建表初始化 | AFK | 1 |
-| 3 | SQLiteStore — CRUD 操作封装 | AFK | 2 |
-| 4 | ChromaDB — Collection 管理 | AFK | 1 |
-| 5 | ChromaDB — CRUD 操作封装 | AFK | 4 |
+| 2 | SQLiteStore — CRUD 操作封装 | AFK | 1 |
+| 3 | ChromaDB — CRUD 操作封装 | AFK | 1 |
+
+### 存储层初始化
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 4 | SQLiteStore — 建表初始化 | AFK | 2 |
+| 5 | ChromaDB — Collection 管理 | AFK | 3 |
 
 ### Embedding
 
@@ -55,7 +60,7 @@
 
 | # | 切片名称 | 类型 | 依赖 |
 |---|---------|:--:|------|
-| 12 | IngestionPipeline | AFK | 3, 5, 7, 11 |
+| 12 | IngestionPipeline | AFK | 2, 3, 7, 11 |
 
 ### LLM
 
@@ -68,7 +73,7 @@
 
 | # | 切片名称 | 类型 | 依赖 |
 |---|---------|:--:|------|
-| 15 | Retriever（Hybrid Search + RRF） | AFK | 3, 5, 7 |
+| 15 | Retriever（Hybrid Search + RRF） | AFK | 2, 3, 7 |
 | 16 | PromptBuilder | AFK | 1 |
 
 ### API 基础设施
@@ -81,7 +86,7 @@
 | 20 | 具体 Exception 类（Unauthorized/NotFound/Retrieval/LLMCall/Ingestion） | AFK | 19 |
 | 21 | API Key 认证 | AFK | 1 |
 | 22 | 速率限制（ScopedRateThrottle） | AFK | 1 |
-| 23 | IngestGuard（SQLite 并发锁） | AFK | 3 |
+| 23 | IngestGuard（SQLite 并发锁） | AFK | 2 |
 | 24 | CORS + CSRF 配置 | AFK | 1 |
 
 ### API 端点
@@ -91,9 +96,9 @@
 | 25 | POST /v1/documents/ingest + GET /v1/sources | AFK | 12, 17-24 |
 | 26 | POST /v1/conversations（新建会话 + RAG 问答） | AFK | 14, 15, 16, 17-24 |
 | 27 | POST /v1/conversations/{id}/messages（继续对话） | AFK | 14, 15, 16, 17-24 |
-| 28 | GET /v1/conversations（会话列表） | AFK | 3, 17-24 |
-| 29 | GET /v1/conversations/{id}/messages（消息列表） | AFK | 3, 17-24 |
-| 30 | DELETE /v1/conversations/{id}（删除会话） | AFK | 3, 17-24 |
+| 28 | GET /v1/conversations（会话列表） | AFK | 2, 17-24 |
+| 29 | GET /v1/conversations/{id}/messages（消息列表） | AFK | 2, 17-24 |
+| 30 | DELETE /v1/conversations/{id}（删除会话） | AFK | 2, 17-24 |
 
 ### 健康检查
 
