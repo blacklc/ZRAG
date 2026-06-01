@@ -32,7 +32,7 @@
 
 | # | 切片名称 | 类型 | 依赖 |
 |---|---------|:--:|------|
-| 4 | SQLiteStore — 建表初始化 | AFK | 2 |
+| 4 | SQLiteStore — 建表初始化（AppConfig.ready() 自动执行 `CREATE TABLE IF NOT EXISTS`） | AFK | 2 |
 | 5 | ChromaDB — Collection 管理 | AFK | 3 |
 
 ### Embedding
@@ -125,7 +125,7 @@
 
 | # | 切片名称 | 类型 | 依赖 |
 |---|---------|:--:|------|
-| 42 | Dockerfile.backend + uwsgi.ini + entrypoint.sh | AFK | 25-32 |
+| 42 | Dockerfile.backend + uwsgi.ini + entrypoint.sh（migrate → collectstatic → uwsgi） | AFK | 25-32 |
 | 43 | Dockerfile.frontend（多阶段构建） | AFK | 38-41 |
 | 44 | nginx.conf（反向代理 + gzip + 超时） | AFK | 42, 43 |
 | 45 | docker-compose.yml + .env 模板 + .dockerignore | AFK | 44 |
