@@ -1,147 +1,136 @@
-# ZRAG - 个人 RAG 知识库 设计计划
+# ZRAG 实现计划
 
-## 背景
+## 切片规则
 
-开发一个个人 RAG 知识库项目（项目名：ZRAG），用于管理本地文档和读书笔记/个人写作，通过自然语言问答的方式检索和利用知识。
-
-## 已确认的需求
-
-| 维度 | 决策 |
+| 规则 | 说明 |
 |------|------|
-| 知识来源 | 本地文档（PDF/MD/DOCX/TXT）+ 读书笔记/个人写作 |
-| 技术栈 | 原生 Python（不使用 LangChain/LlamaIndex 等框架） |
-| 使用方式 | Web UI + RESTful API 双模式 |
-| 规模 | 小型（< 1K 文档） |
-| LLM | 支持可切换：API（OpenAI/Claude）+ 本地（Ollama） |
-| Embedding | 本地模型（sentence-transformers） |
-| 向量数据库 | ChromaDB（轻量文件型，零配置） |
-| 开发者背景 | Python + Go 都熟悉，偏底层控制 |
+| AFK（Away From Keyboard） | AI 自主实现，测试通过 + review 后 merge |
+| HITL（Human In The Loop） | 需人工参与的切片 |
+| 测试策略 | 每个 AFK 切片自带测试代码，测试通过视为切片验收门槛 |
+| 失败升级 | AFK 切片连续 3 次测试不通过 → 自动升级为 HITL |
+| 依赖约束 | 上游切片未 merge，下游不启动 |
+| 实现顺序 | 抽象类先于实体类 |
 
-## 项目结构
+---
 
-```
-ZRAG/
-├── pyproject.toml                 # 依赖与构建配置
-├── config/
-│   ├── defaults.yaml              # 默认配置
-│   └── settings.py                # 配置加载器（YAML + 环境变量，优先级：env > yaml > 默认值）
-├── zrag/
-│   ├── __main__.py                # python -m zrag 入口，分发 serve/ingest/query 命令
-│   ├── models/
-│   │   ├── document.py            # Document, Chunk 数据类
-│   │   └── retrieval.py           # RetrievalResult, QueryResult 数据类
-│   ├── ingest/
-│   │   ├── loader.py              # 文件加载器：PDFLoader, MarkdownLoader, DocxLoader, TextLoader
-│   │   ├── chunker.py             # 递归字符分割 + Markdown 标题感知分块（512字符/64重叠）
-│   │   └── pipeline.py            # 编排：load → chunk → embed → store
-│   ├── embed/
-│   │   ├── base.py                # 抽象 EmbeddingModel 接口
-│   │   └── local.py               # sentence-transformers 实现（BGE-small-zh-v1.5，384维）
-│   ├── store/
-│   │   ├── vector_store.py        # ChromaDB 封装：add/similarity_search/delete/count
-│   │   ├── bm25_index.py          # 纯 Python BM25（jieba 可选，字符 bigram 兜底）
-│   │   └── fusion.py              # RRF（Reciprocal Rank Fusion）混合排序
-│   ├── retrieval/
-│   │   ├── retriever.py           # 检索编排：vector/bm25/hybrid 三种模式
-│   │   └── reranker.py            # 可选重排序：交叉编码器（BGE-reranker）或 LLM 排序
-│   ├── llm/
-│   │   ├── base.py                # 抽象 BaseLLM 接口（chat + chat_stream）
-│   │   ├── openai_.py             # OpenAI API 兼容（也支持 DeepSeek 等）
-│   │   ├── claude.py              # Anthropic Claude API
-│   │   └── ollama.py              # Ollama REST API（httpx 直接调用，无额外依赖）
-│   ├── api/
-│   │   ├── server.py              # FastAPI app 创建 + lifespan + CORS
-│   │   ├── schemas.py             # 请求/响应 Pydantic 模型
-│   │   └── routes/
-│   │       ├── documents.py       # POST/GET/DELETE /api/documents
-│   │       ├── chat.py            # POST /api/chat + /api/chat/stream（SSE）
-│   │       └── system.py          # GET /api/health, /api/config
-│   ├── web/
-│   │   ├── router.py              # Jinja2 页面路由
-│   │   ├── templates/
-│   │   │   ├── base.html          # 基础布局
-│   │   │   ├── chat.html          # 对话页面
-│   │   │   └── documents.html     # 文档管理页面
-│   │   └── static/
-│   │       ├── css/app.css        # 单文件样式
-│   │       └── js/app.js          # 单文件 JS（SSE 流式 + 上传逻辑）
-│   └── cli/
-│       ├── serve.py               # 启动服务
-│       ├── ingest.py              # 批量导入文档
-│       └── query.py               # 一键查询
-├── data/                          # 运行时数据（gitignored）
-│   ├── chroma_db/                 # ChromaDB 持久化存储
-│   ├── documents/                 # 上传的文件副本
-│   └── bm25_cache/                # BM25 索引缓存
-└── tests/
-```
+## 全部切片（45 个）
 
-## 核心数据流
+### 项目骨架
 
-**摄入流程**：
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 1 | 项目骨架 + 配置加载 | AFK | 无 |
 
-```
-文件 → loader（按扩展名自动选择解析器）→ Document（原始文本+元数据）
-    → chunker（递归分割+重叠窗口）→ list[Chunk]
-        → embed 生成向量
-        → ChromaDB（持久化存储）
-        → BM25 Index（内存+JSON 缓存）
-```
+### 健康检查
 
-**查询流程**：
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 2 | GET /v1/health/live | AFK | 1 |
+| 3 | GET /v1/health/ready | AFK | 1 |
 
-```
-用户问题 → embed_query 获取 query 向量
-    ┌─→ ChromaDB 向量检索（cosine similarity）
-    └─→ BM25 关键词检索
-         → RRF 融合排序
-         → [可选] 交叉编码器/LLM 重排序
-         → 构建 Prompt（system + context + question）
-         → LLM（API/Ollama）生成回答
-         → 返回 {answer, sources}
-```
+### 存储层
 
-## 核心依赖
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 4 | SQLiteStore — 建表初始化 | AFK | 1 |
+| 5 | SQLiteStore — CRUD 操作封装 | AFK | 4 |
+| 6 | ChromaDB — Collection 管理 | AFK | 1 |
+| 7 | ChromaDB — CRUD 操作封装 | AFK | 6 |
 
-| 包 | 用途 |
-|------|------|
-| chromadb | 向量数据库（文件型，零配置） |
-| sentence-transformers + torch | 本地嵌入模型 |
-| fastapi + uvicorn | Web 服务框架 |
-| httpx | LLM API 调用（async HTTP） |
-| pydantic + pyyaml | 配置与校验 |
-| pypdf / python-docx / markdown | 文档解析 |
-| jinja2 | 模板渲染 |
-| openai / anthropic（可选） | 云端 LLM |
+### Embedding
 
-无需 langchain/llama-index，无需 rank-bm25（约50行代码自己写）
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 8 | EmbeddingModel ABC | AFK | 1 |
+| 9 | BgeSmallEmbedder | AFK | 8 |
 
-## Web UI 策略
+### Source
 
-- 无构建工具、无 Node.js、无 React
-- FastAPI + Jinja2 服务端渲染
-- Vanilla JS（~200行）处理 SSE 流式对话
-- CDN 加载 `marked.js` 渲染 Markdown
-- 两个页面：聊天 `/` + 文档管理 `/documents`
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 10 | DocumentSource ABC | AFK | 1 |
+| 11 | MacNotesSource | AFK | 10 |
 
-## 分步实施
+### Chunking
 
-| 阶段 | 内容 | 预估 |
-|------|------|------|
-| 1. 基础 | pyproject.toml → config → models → 空目录结构 | 半天 |
-| 2. 摄入 | loader（4种文件类型）→ chunker → pipeline | 1天 |
-| 3. 存储与嵌入 | embed → vector_store → bm25_index → fusion | 半天 |
-| 4. LLM | base 抽象 → OpenAI → Claude → Ollama | 半天 |
-| 5. 检索 | retriever（3种模式）→ reranker | 半天 |
-| 6. API | FastAPI 路由 + schemas + 流式 SSE | 半天 |
-| 7. Web UI | Jinja2 模板 + CSS + JS | 1天 |
-| 8. CLI + 收尾 | serve/ingest/query 命令 + README | 半天 |
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 12 | ChunkingStrategy ABC | AFK | 1 |
+| 13 | 具体 ChunkingStrategy（Paragraph + Recursive + Composite） | AFK | 12 |
 
-## 验证方式
+### Ingestion
 
-1. 启动后访问 `http://localhost:8765` 看到 Web UI
-2. 上传一个 Markdown 文档，检查 ChromaDB 中是否有对应 chunks
-3. 在聊天框提问，确认能检索并生成带来源的回答
-4. 测试流式 SSE 输出是否正常
-5. 切换 LLM provider（ollama ↔ openai）验证可工作
-6. 通过 `python -m zrag query "xxx"` CLI 模式验证
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 14 | IngestionPipeline | AFK | 5, 7, 9, 13 |
+
+### LLM
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 15 | LLMProvider ABC | AFK | 1 |
+| 16 | LLMGatewayProvider | HITL | 15 |
+
+### 检索 + Prompt
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 17 | Retriever（Hybrid Search + RRF） | AFK | 5, 7, 9 |
+| 18 | PromptBuilder | AFK | 1 |
+
+### API 基础设施
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 19 | APIResponse 包装器 | AFK | 1 |
+| 20 | RequestIDMiddleware | AFK | 1 |
+| 21 | BaseZragException + Handler Registry | AFK | 1 |
+| 22 | 具体 Exception 类（Unauthorized/NotFound/Retrieval/LLMCall/Ingestion） | AFK | 21 |
+| 23 | API Key 认证 | AFK | 1 |
+| 24 | 速率限制（ScopedRateThrottle） | AFK | 1 |
+| 25 | IngestGuard（SQLite 并发锁） | AFK | 5 |
+| 26 | CORS + CSRF 配置 | AFK | 1 |
+
+### API 端点
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 27 | POST /v1/documents/ingest + GET /v1/sources | AFK | 14, 19-26 |
+| 28 | POST /v1/conversations（新建会话 + RAG 问答） | AFK | 16, 17, 18, 19-26 |
+| 29 | POST /v1/conversations/{id}/messages（继续对话） | AFK | 16, 17, 18, 19-26 |
+| 30 | GET /v1/conversations（会话列表） | AFK | 5, 19-26 |
+| 31 | GET /v1/conversations/{id}/messages（消息列表） | AFK | 5, 19-26 |
+| 32 | DELETE /v1/conversations/{id}（删除会话） | AFK | 5, 19-26 |
+
+### Web UI
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 33 | Vue 项目初始化 + Tailwind + Vue Router + API 封装 | AFK | 27-32 |
+| 34 | NavBar 组件（导航栏 + 深色模式切换） | AFK | 33 |
+| 35 | ChatInput 组件（自动扩展 textarea + 模型选择器 + 键盘快捷键） | AFK | 33 |
+| 36 | ChatMessage 组件（Markdown 渲染 + 代码高亮 + 来源标注 + 复制） | AFK | 33 |
+| 37 | ChatSidebar 组件（会话列表 + 切换 + 删除确认弹窗） | AFK | 33 |
+| 38 | ChatView 页面（组装 Sidebar + Message + Input + 空状态 + 加载） | AFK | 34, 35, 36, 37 |
+| 39 | SourcesView 页面（源卡片 + 摄入按钮 + 进度条 + 报告刷新） | AFK | 33 |
+| 40 | 404 页面 + 全局错误处理（Toast 通知） | AFK | 33 |
+| 41 | 响应式布局 | AFK | 38, 39 |
+
+### 部署
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 42 | Dockerfile.backend + uwsgi.ini + entrypoint.sh | AFK | 27-32 |
+| 43 | Dockerfile.frontend（多阶段构建） | AFK | 38-41 |
+| 44 | nginx.conf（反向代理 + gzip + 超时） | AFK | 42, 43 |
+| 45 | docker-compose.yml + .env 模板 + .dockerignore | AFK | 44 |
+
+---
+
+## 统计
+
+| 类型 | 数量 |
+|------|:--:|
+| AFK | 44 |
+| HITL | 1（#16 LLMGatewayProvider） |
+| 总计 | 45 |
