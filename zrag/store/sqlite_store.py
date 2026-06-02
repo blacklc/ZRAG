@@ -195,6 +195,82 @@ class SQLiteStore:
             conn.rollback()
             raise
 
+    def init_db(self) -> None:
+        """创建或更新所有业务数据库表结构
+
+        使用 CREATE TABLE IF NOT EXISTS 语义自动建表,
+        包括 chunks / chunks_fts( FTS5 ) / processed_docs / conversations / messages 五张表。
+        同时创建 FTS5 触发器及索引。
+        该方法幂等——重复调用不会报错或覆盖已有数据。
+
+        @raises: SQLite 建表或索引创建失败
+        @type:   sqlite3.OperationalError
+        """
+        conn = self._get_conn()
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS chunks (
+                chunk_id     TEXT PRIMARY KEY,
+                source_id    TEXT NOT NULL,
+                source_type  TEXT NOT NULL,
+                doc_title    TEXT,
+                content      TEXT NOT NULL,
+                chunk_index  INTEGER,
+                created_at   TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_source_id ON chunks(source_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_source_type ON chunks(source_type)")
+
+        conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+                content, content=chunks, content_rowid=rowid
+            )
+        """)
+
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+                INSERT INTO chunks_fts(rowid, content) VALUES (new.rowid, new.content);
+            END
+        """)
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+                INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+            END
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS processed_docs (
+                source_id     TEXT PRIMARY KEY,
+                source_type   TEXT NOT NULL,
+                content_hash  TEXT NOT NULL,
+                imported_at   TEXT NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_processed_source_type ON processed_docs(source_type)")
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS conversations (
+                id         TEXT PRIMARY KEY,
+                title      TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id              TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                role            TEXT NOT NULL,
+                content         TEXT NOT NULL,
+                sources         TEXT,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_conv_id ON messages(conversation_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(conversation_id, created_at)")
+
     def close(self) -> None:
         """关闭数据库连接
 

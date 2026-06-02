@@ -10,6 +10,7 @@ ALLOWED_HOSTS = ['localhost']
 INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'rest_framework',
+    'zrag',
 ]
 
 MIDDLEWARE = []
