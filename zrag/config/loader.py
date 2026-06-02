@@ -2,7 +2,21 @@ from pathlib import Path
 
 
 def load_config(config_dir: str = "config") -> dict:
-    """扫描目录下所有 .yaml 文件，按 top-level key 深度合并"""
+    """加载并合并配置文件中所有 YAML 文件
+
+    扫描指定目录下所有 .yaml 文件，按 top-level key 进行深度合并。
+    若多个文件存在相同 key，则按规则合并：dict 深度合并，非 dict 后覆盖前。
+    合并完成后对配置项中的 ${ENV_VAR} 进行环境变量替换。
+
+    @param config_dir: 配置文件的存放目录路径, defaults to "config"
+    @type  config_dir: str, optional
+
+    @raises: 当配置项中包含未定义的环境变量时抛出
+    @type:   ValueError
+
+    @return: 合并后的配置字典
+    @type:   dict
+    """
     config = {}
     config_path = Path(config_dir)
     if not config_path.exists():
@@ -21,7 +35,18 @@ def load_config(config_dir: str = "config") -> dict:
 
 
 def _resolve_env_vars(config: dict) -> None:
-    """递归替换 dict 中所有 `${ENV_VAR}` 为环境变量值"""
+    """递归替换配置中所有 ${ENV_VAR} 为环境变量实际值
+
+    遍历配置字典的每一项，若值为字符串则查找 ${VAR} 模式并替换为 os.environ 中的变量值。
+    若某个环境变量未定义，则抛出 ValueError 并提示该变量名。
+    若值为 dict，递归处理其子项。
+
+    @param config: 需要执行环境变量替换的配置字典。该字典会被原地修改。
+    @type  config: dict
+
+    @raises: 当 ${VAR} 中的 VAR 在环境变量中不存在时抛出
+    @type:   ValueError
+    """
     import os as _os
     import re as _re
 
