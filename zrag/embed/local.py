@@ -1,4 +1,8 @@
 """本地 Embedding 模型实现"""
+import os
+
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 from sentence_transformers import SentenceTransformer
 
 from zrag.embed.base import EmbeddingModel
