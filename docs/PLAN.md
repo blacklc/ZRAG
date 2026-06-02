@@ -139,3 +139,57 @@
 | AFK | 44 |
 | HITL | 1（#14 LLMGatewayProvider） |
 | 总计 | 45 |
+
+---
+
+## 开发进度
+
+| # | 切片名称 | 状态 | 测试数 | 提交 |
+|---|---------|:--:|:-----:|------|
+| 1 | 项目骨架 + 配置加载 | ✅ | 10 | `f3ccf85` |
+| 2 | SQLiteStore — CRUD 操作封装 | ✅ | 9 | `66b24cd` |
+| 3 | ChromaDB — CRUD 操作封装 | ⬜ | - | - |
+| 4 | SQLiteStore — 建表初始化 | ⬜ | - | - |
+| 5 | ChromaDB — Collection 管理 | ⬜ | - | - |
+| 6 | EmbeddingModel ABC | ⬜ | - | - |
+| 7 | BgeSmallEmbedder | ⬜ | - | - |
+| 8 | DocumentSource ABC | ⬜ | - | - |
+| 9 | MacNotesSource | ⬜ | - | - |
+| 10 | ChunkingStrategy ABC | ⬜ | - | - |
+| 11 | 具体 ChunkingStrategy | ⬜ | - | - |
+| 12 | IngestionPipeline | ⬜ | - | - |
+| 13 | LLMProvider ABC | ⬜ | - | - |
+| 14 | LLMGatewayProvider | ⬜ | - | - |
+| 15 | Retriever（Hybrid Search + RRF） | ⬜ | - | - |
+| 16 | PromptBuilder | ⬜ | - | - |
+| 17 | APIResponse 包装器 | ⬜ | - | - |
+| 18 | RequestIDMiddleware | ⬜ | - | - |
+| 19 | BaseZragException + Handler Registry | ⬜ | - | - |
+| 20 | 具体 Exception 类（5 个） | ⬜ | - | - |
+| 21 | API Key 认证 | ⬜ | - | - |
+| 22 | 速率限制 | ⬜ | - | - |
+| 23 | IngestGuard | ⬜ | - | - |
+| 24 | CORS + CSRF 配置 | ⬜ | - | - |
+| 25 | POST /v1/documents/ingest + GET /v1/sources | ⬜ | - | - |
+| 26 | POST /v1/conversations | ⬜ | - | - |
+| 27 | POST /v1/conversations/{id}/messages | ⬜ | - | - |
+| 28 | GET /v1/conversations | ⬜ | - | - |
+| 29 | GET /v1/conversations/{id}/messages | ⬜ | - | - |
+| 30 | DELETE /v1/conversations/{id} | ⬜ | - | - |
+| 31 | GET /v1/health/live | ⬜ | - | - |
+| 32 | GET /v1/health/ready | ⬜ | - | - |
+| 33 | Vue 项目初始化 | ⬜ | - | - |
+| 34 | NavBar 组件 | ⬜ | - | - |
+| 35 | ChatInput 组件 | ⬜ | - | - |
+| 36 | ChatMessage 组件 | ⬜ | - | - |
+| 37 | ChatSidebar 组件 | ⬜ | - | - |
+| 38 | ChatView 页面 | ⬜ | - | - |
+| 39 | SourcesView 页面 | ⬜ | - | - |
+| 40 | 404 页面 + 全局错误处理 | ⬜ | - | - |
+| 41 | 响应式布局 | ⬜ | - | - |
+| 42 | Dockerfile.backend + uwsgi.ini + entrypoint.sh | ⬜ | - | - |
+| 43 | Dockerfile.frontend | ⬜ | - | - |
+| 44 | nginx.conf | ⬜ | - | - |
+| 45 | docker-compose.yml + .env 模板 + .dockerignore | ⬜ | - | - |
+
+- ✅ 已完成 · 🔄 进行中 · ⬜ 待开始 · ⚠ HITL 升级
