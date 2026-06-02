@@ -148,7 +148,7 @@
 |---|---------|:--:|:-----:|------|
 | 1 | 项目骨架 + 配置加载 | ✅ | 10 | `f3ccf85` |
 | 2 | SQLiteStore — CRUD 操作封装 | ✅ | 9 | `66b24cd` |
-| 3 | ChromaDB — CRUD 操作封装 | ⬜ | - | - |
+| 3 | ChromaDB — CRUD 操作封装 | ✅ | 7 | `498110b` |
 | 4 | SQLiteStore — 建表初始化 | ⬜ | - | - |
 | 5 | ChromaDB — Collection 管理 | ⬜ | - | - |
 | 6 | EmbeddingModel ABC | ⬜ | - | - |
