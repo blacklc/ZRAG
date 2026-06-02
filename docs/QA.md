@@ -289,7 +289,7 @@ class EmbeddingModel(ABC):
 
 | 模型 | 维度 | 参数量 | C-MTEB 中文平均 | 特点 |
 |------|------|--------|:-:|------|
-| **bge-small-zh-v1.5** | 384 | ~33M | ~58 | 轻量快速，CPU 友好 |
+| **bge-small-zh-v1.5** | 512 | ~33M | ~58 | 轻量快速，CPU 友好 |
 | **bge-base-zh-v1.5** | 768 | ~110M | ~62 | 均衡之选 |
 | **BGE-M3** | 1024 | ~568M | ~69 | 多语言+多粒度，质量最高但需 GPU |
 | **Qwen3-Embedding** | 2048 | ~700M | ~69 | 最新最强，也需 GPU |
@@ -326,7 +326,7 @@ class BgeSmallEmbedder(EmbeddingModel):
 
     @property
     def dimension(self) -> int:
-        return 384
+        return 512
 ```
 
 **配置**:
@@ -2499,3 +2499,63 @@ docker compose build && docker compose up -d             # 全部重建
 | 模型管理 | 宿主机预下载 → ./models:/app/models:ro |
 | 镜像更新 | docker compose build \<service\> && docker compose up -d |
 | Gunicorn | 替换为 uWSGI（用户指定） |
+
+---
+
+## Q35: BgeSmallEmbedder 实际维度与模型离线加载问题
+
+**用户**: 继续切片 7 的实现。
+
+**决策**: 实现 `BgeSmallEmbedder(EmbeddingModel)`，使用 sentence-transformers 加载 `BAAI/bge-small-zh-v1.5` 模型。
+
+### 发现 1：模型实际输出维度
+
+bge-small-zh-v1.5 的 `hidden_size` 实际为 **512**，而非 HuggingFace 模型页面标注的 384。
+
+| 项目 | 设计阶段假设 | 实际验证结果 |
+|------|:----------:|:----------:|
+| 维度 | 384 | **512** |
+| 验证方式 | 查阅文档 | `len(model.encode(["test"]))` 实际运行 |
+
+**影响**: 所有引用 384 维度的设计文档需要更新为 512 维。ChromaDB Collection 配置不受影响（Cosine 距离兼容任意维度）。
+
+### 发现 2：TRANSFORMERS_OFFLINE 环境变量
+
+**问题**: 在不执行 `export HF_ENDPOINT=https://hf-mirror.com` 的环境中运行 `BgeSmallEmbedder` 时, sentence-transformers 会尝试连接 huggingface.co 进行在线验证。
+由于网络环境无法访问 huggingface.co，连接超时导致进程无限卡住。
+
+**日志特征**:
+```
+HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded
+(Caused by ConnectTimeoutError, 'Connection to huggingface.co timed out.')
+```
+
+**解决方案**: 在 `zrag/embed/local.py` 中强制设置离线模式:
+
+```python
+import os
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+```
+
+**模型缓存验证**:
+```bash
+# 模型已缓存到如下目录
+~/.cache/huggingface/hub/models--BAAI--bge-small-zh-v1.5/
+# 权重文件约 91MB
+
+# 首次下载方式
+HF_ENDPOINT=https://hf-mirror.com pip install sentence-transformers
+HF_ENDPOINT=https://hf-mirror.com python -c "
+from sentence_transformers import SentenceTransformer
+SentenceTransformer('BAAI/bge-small-zh-v1.5')
+"
+```
+
+### 切片 7 完成状态
+
+| 文件 | 说明 |
+|------|------|
+| `zrag/embed/base.py` | EmbeddingModel ABC（切片 6） |
+| `zrag/embed/local.py` | BgeSmallEmbedder 实现 |
+| `tests/test_08_bge_embedder.py` | 4 个测试（维度/一致性/属性） |
+| 测试总数 | 45（现存 41 + 新增 4） |

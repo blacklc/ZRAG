@@ -70,7 +70,7 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 
 ### Embedding
 
-- 模型：BAAI/bge-small-zh-v1.5（384 维，sentence-transformers 加载）
+- 模型：BAAI/bge-small-zh-v1.5（512 维，sentence-transformers 加载）
 - EmbeddingModel 抽象基类，定义 embed(texts)、embed_query(query) 和 dimension 接口
 - 模型在宿主机预下载，容器内通过只读 volume 挂载，启动时零等待
 
