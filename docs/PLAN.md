@@ -152,7 +152,7 @@
 | 4 | SQLiteStore — 建表初始化 | ✅ | 6 | `b7e8442` |
 | 5 | ChromaDB — Collection 管理 | ✅ | 6 | `ea9d435` |
 | 6 | EmbeddingModel ABC | ✅ | 3 | `f2dab87` |
-| 7 | BgeSmallEmbedder | ⬜ | - | - |
+| 7 | BgeSmallEmbedder | ✅ | 4 | `71b03ff` |
 | 8 | DocumentSource ABC | ⬜ | - | - |
 | 9 | MacNotesSource | ⬜ | - | - |
 | 10 | ChunkingStrategy ABC | ⬜ | - | - |
