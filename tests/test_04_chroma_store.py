@@ -1,19 +1,12 @@
-"""切片 3 — ChromaDB CRUD — Tracer Bullet"""
-import pytest
+"""切片 3 — ChromaDB CRUD"""
 import tempfile
+from zrag.store.vector_store import ChromaStore
 
 
-@pytest.fixture
-def store():
-    """每个测试使用独立的临时目录"""
-    from zrag.store.vector_store import ChromaStore
+def test_add_then_search_returns_similar():
+    """写入向量 → similarity_search 返回最相似的结果"""
     with tempfile.TemporaryDirectory() as tmp:
-        yield ChromaStore(persist_dir=tmp)
-
-
-class TestAddAndSearch:
-    def test_add_then_search_returns_similar(self, store):
-        """写入向量 → similarity_search 返回最相似的结果"""
+        store = ChromaStore(persist_dir=tmp)
         store.add(
             ids=['vec_0', 'vec_1'],
             embeddings=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
@@ -26,8 +19,11 @@ class TestAddAndSearch:
         assert len(results) >= 1
         assert results[0]['id'] == 'vec_0'
 
-    def test_distance_ordering(self, store):
-        """相似度搜索按距离升序排列（距离越小越相似）"""
+
+def test_distance_ordering():
+    """相似度搜索按距离升序排列（距离越小越相似）"""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChromaStore(persist_dir=tmp)
         store.add(
             ids=['same_dir', 'opposite_dir', 'orthogonal'],
             embeddings=[[0.9, 0.1], [-0.5, 0.5], [0.0, 1.0]],
@@ -38,9 +34,10 @@ class TestAddAndSearch:
         assert results[0]['distance'] <= results[1]['distance']
 
 
-class TestSearchLimit:
-    def test_k_limits_results(self, store):
-        """k=2 → 只返回 2 条结果"""
+def test_k_limits_results():
+    """k=2 → 只返回 2 条结果"""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChromaStore(persist_dir=tmp)
         store.add(
             ids=[str(i) for i in range(5)],
             embeddings=[[float(i), 0.0] for i in range(5)],
@@ -50,9 +47,10 @@ class TestSearchLimit:
         assert len(results) == 2
 
 
-class TestDeleteBySource:
-    def test_delete_removes_vector(self, store):
-        """delete_by_source → 该源文档的向量被删除"""
+def test_delete_removes_vector():
+    """delete_by_source → 该源文档的向量被删除"""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChromaStore(persist_dir=tmp)
         store.add(
             ids=['a_0', 'a_1', 'b_0'],
             embeddings=[[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]],
@@ -70,9 +68,10 @@ class TestDeleteBySource:
         assert 'a_1' not in ids
 
 
-class TestCount:
-    def test_count_after_add(self, store):
-        """添加后 count 返回正确数量"""
+def test_count_after_add():
+    """添加后 count 返回正确数量"""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChromaStore(persist_dir=tmp)
         store.add(
             ids=['x', 'y', 'z'],
             embeddings=[[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]],
@@ -80,13 +79,17 @@ class TestCount:
         )
         assert store.count() == 3
 
-    def test_empty_collection(self, store):
-        """空集合 → count=0"""
+
+def test_empty_collection():
+    """空集合 → count=0"""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChromaStore(persist_dir=tmp)
         assert store.count() == 0
 
 
-class TestEmptyAdd:
-    def test_add_empty_list_no_error(self, store):
-        """添加空列表 → 不报错"""
+def test_add_empty_list_no_error():
+    """添加空列表 → 不报错"""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ChromaStore(persist_dir=tmp)
         store.add(ids=[], embeddings=[], metadatas=[])
         assert store.count() == 0

@@ -47,8 +47,8 @@ class ChromaStore:
         @param metadatas: 元数据字典列表, 每个元素包含 source_id / source_type 等字段
         @type  metadatas: list[dict]
 
-        @raises: 当 ids / embeddings / metadatas 列表长度不一致时触发
-        @type:   ValueError
+        @raises: ChromaDB 底层向量写入失败
+        @type:   chromadb.errors.ChromaError
         """
         if not ids:
             return
@@ -71,6 +71,9 @@ class ChromaStore:
 
         @return: 检索结果列表, 每条包含 id / metadata / distance 字段
         @type:   list[dict]
+
+        @raises: ChromaDB 向量检索失败
+        @type:   chromadb.errors.ChromaError
         """
         results = self._collection.query(
             query_embeddings=[query_vector],
@@ -95,6 +98,9 @@ class ChromaStore:
 
         @param source_id: 源文档的唯一标识
         @type  source_id: str
+
+        @raises: ChromaDB 底层向量删除失败
+        @type:   chromadb.errors.ChromaError
         """
         self._collection.delete(where={"source_id": source_id})
 
@@ -103,5 +109,8 @@ class ChromaStore:
 
         @return: 当前集合中存储的向量数量
         @type:   int
+
+        @raises: ChromaDB 底层集合访问失败
+        @type:   chromadb.errors.ChromaError
         """
         return self._collection.count()
