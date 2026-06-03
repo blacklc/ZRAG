@@ -29,15 +29,15 @@
 /**
  * 404 视图组件
  *
- * 监听 router 变化保持路由响应,点击"返回首页"按钮使用 router.push('/')
- * 跳转至根路径(ChatView).
+ * 全局 404 占位页, 点击"返回首页"按钮使用 router.push('/')
+ * 跳转至根路径 (ChatView).
  */
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
 
 /**
- * 跳转回首页(根路径).
+ * 跳转回首页 (根路径)
  *
  * @returns {void}
  */

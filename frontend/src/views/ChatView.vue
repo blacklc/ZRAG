@@ -224,14 +224,14 @@ import {
 } from '../api/endpoints.js'
 import { useToast } from '../composables/useToast.js'
 
-// ======================
-// Toast
-// ======================
-const toast = useToast()
+/** Tailwind 'md' 断点 (像素), 与 NavBar 保持一致 */
+const MD_BREAKPOINT_PX = 768
+/** 默认会话标题 (当会话未命名时显示) */
+const DEFAULT_CONVERSATION_TITLE = '新对话'
+/** 默认选中的模型标识 */
+const DEFAULT_MODEL = 'smart-router'
 
-// ======================
-// 响应式状态 (业务)
-// ======================
+const toast = useToast()
 
 /** 会话列表 */
 const conversations = ref([])
@@ -242,7 +242,7 @@ const messages = ref([])
 /** 输入框文本 (v-model) */
 const inputText = ref('')
 /** 选中的模型; 默认 smart-router */
-const selectedModel = ref('smart-router')
+const selectedModel = ref(DEFAULT_MODEL)
 /** 会话列表加载状态 */
 const conversationsLoading = ref(false)
 /** 消息加载状态 */
@@ -250,24 +250,13 @@ const messagesLoading = ref(false)
 /** 发送中状态 (含 AI 思考阶段) */
 const sending = ref(false)
 
-// ======================
-// 响应式状态 (布局)
-// ======================
-
 /** 移动端侧边栏开关 */
 const mobileSidebarOpen = ref(false)
 
-// ======================
-// 模板引用
-// ======================
 /** 消息容器 DOM, 用于 nextTick 后再定位 scrollAnchor */
 const messagesContainerRef = ref(null)
 /** 消息列表底部的滚动锚点 */
 const scrollAnchorRef = ref(null)
-
-// ======================
-// 计算属性
-// ======================
 
 /** 当前激活的会话对象 (来自 conversations 列表) */
 const activeConversation = computed(() => {
@@ -277,18 +266,15 @@ const activeConversation = computed(() => {
 
 /** 顶部标题: 有会话时显示其标题, 否则显示"新对话" */
 const currentTitle = computed(() => {
-  return activeConversation.value?.title || '新对话'
+  return activeConversation.value?.title || DEFAULT_CONVERSATION_TITLE
 })
 
 /** 输入框 placeholder: 根据是否有激活会话区分 */
 const inputPlaceholder = computed(() => {
   return activeConversationId.value
-    ? '继续提问...' : '向你的知识库提问...'
+    ? '继续提问...'
+    : '向你的知识库提问...'
 })
-
-// ======================
-// 生命周期
-// ======================
 
 /**
  * 页面挂载时拉取会话列表
@@ -310,17 +296,15 @@ onBeforeUnmount(() => {
   }
 })
 
-// ======================
-// 工具方法
-// ======================
-
 /**
  * 监听窗口尺寸变化: 在 >=md 时强制关闭移动菜单状态
  * 避免从桌面缩到移动端时, 侧边栏还停留在"打开"状态.
+ *
+ * @returns {void}
  */
 function onResize() {
   if (typeof window === 'undefined') return
-  if (window.innerWidth >= 768) {
+  if (window.innerWidth >= MD_BREAKPOINT_PX) {
     mobileSidebarOpen.value = false
   }
 }
@@ -328,6 +312,8 @@ function onResize() {
 /**
  * 切换移动端侧边栏
  * 仅在 <md 时由 NavBar 的汉堡按钮触发
+ *
+ * @returns {void}
  */
 function toggleMobileSidebar() {
   mobileSidebarOpen.value = !mobileSidebarOpen.value
@@ -335,6 +321,8 @@ function toggleMobileSidebar() {
 
 /**
  * 关闭移动端侧边栏 (点击遮罩)
+ *
+ * @returns {void}
  */
 function closeMobileSidebar() {
   mobileSidebarOpen.value = false
@@ -345,6 +333,8 @@ function closeMobileSidebar() {
  * - 通过 nextTick 等待 DOM 更新完成
  * - 优先使用 scrollIntoView, 兼容性最好
  * - 失败 (容器尚未挂载) 时静默处理
+ *
+ * @returns {Promise<void>}
  */
 async function scrollToBottom() {
   await nextTick()
@@ -355,9 +345,22 @@ async function scrollToBottom() {
 }
 
 /**
+ * 提取错误消息, 后端 ApiError / 普通 Error / 字符串均可处理
+ *
+ * @param {*} err - 任意异常
+ * @param {string} fallback - 兜底文案
+ * @returns {string} 错误描述
+ */
+function getErrorMessage(err, fallback) {
+  return err?.message || fallback
+}
+
+/**
  * 加载会话列表
  * - 设置 conversationsLoading
  * - 失败时弹出错误 toast
+ *
+ * @returns {Promise<void>}
  */
 async function loadConversations() {
   conversationsLoading.value = true
@@ -365,7 +368,7 @@ async function loadConversations() {
     const list = await listConversations()
     conversations.value = Array.isArray(list) ? list : []
   } catch (e) {
-    toast.error(`加载会话列表失败: ${e?.message || '未知错误'}`)
+    toast.error(`加载会话列表失败: ${getErrorMessage(e, '未知错误')}`)
     conversations.value = []
   } finally {
     conversationsLoading.value = false
@@ -374,7 +377,9 @@ async function loadConversations() {
 
 /**
  * 加载指定会话的消息列表
- * @param {string} conversationId 会话 ID
+ *
+ * @param {string} conversationId - 会话 ID
+ * @returns {Promise<void>}
  */
 async function loadMessages(conversationId) {
   messagesLoading.value = true
@@ -383,21 +388,19 @@ async function loadMessages(conversationId) {
     messages.value = Array.isArray(list) ? list : []
     await scrollToBottom()
   } catch (e) {
-    toast.error(`加载消息失败: ${e?.message || '未知错误'}`)
+    toast.error(`加载消息失败: ${getErrorMessage(e, '未知错误')}`)
     messages.value = []
   } finally {
     messagesLoading.value = false
   }
 }
 
-// ======================
-// 事件处理
-// ======================
-
 /**
  * 处理"新建会话"
  * 业务语义: 清空当前选择, 让用户输入第一条消息来触发 createConversation
  * 这里只重置 UI 状态, 不调用任何接口.
+ *
+ * @returns {void}
  */
 function handleNewConversation() {
   activeConversationId.value = null
@@ -408,7 +411,9 @@ function handleNewConversation() {
 
 /**
  * 处理"选择会话"
- * @param {string} id 会话 ID
+ *
+ * @param {string} id - 会话 ID
+ * @returns {Promise<void>}
  */
 async function handleSelectConversation(id) {
   if (!id || id === activeConversationId.value) return
@@ -419,13 +424,15 @@ async function handleSelectConversation(id) {
 
 /**
  * 处理"删除会话"
- * @param {string} id 会话 ID
+ *
+ * @param {string} id - 会话 ID
+ * @returns {Promise<void>}
  */
 async function handleDeleteConversation(id) {
   try {
     await deleteConversation(id)
   } catch (e) {
-    toast.error(`删除会话失败: ${e?.message || '未知错误'}`)
+    toast.error(`删除会话失败: ${getErrorMessage(e, '未知错误')}`)
     return
   }
   // 从本地列表中移除
@@ -442,10 +449,48 @@ async function handleDeleteConversation(id) {
 }
 
 /**
+ * 在已有会话中追加一条用户消息
+ *
+ * @param {string} conversationId - 目标会话 ID
+ * @param {string} text - 已 trim 的消息文本
+ * @returns {Promise<void>}
+ */
+async function appendMessageToConversation(conversationId, text) {
+  await addMessage(conversationId, text)
+  // 重新拉取消息以获取后端可能返回的最新状态
+  await loadMessages(conversationId)
+  // 刷新侧边栏以更新 last_msg_at / title 等
+  await loadConversations()
+}
+
+/**
+ * 创建新会话并加载首轮消息
+ *
+ * @param {string} text - 已 trim 的消息文本
+ * @returns {Promise<void>}
+ */
+async function startNewConversation(text) {
+  const conv = await createConversation(text)
+  const newId = conv?.id
+  if (!newId) {
+    throw new Error('后端未返回会话 ID')
+  }
+  // 选中新会话
+  activeConversationId.value = newId
+  // 重新拉取该会话的消息 (含后端可能返回的 user + assistant 完整消息)
+  await loadMessages(newId)
+  // 刷新侧边栏列表 (后端可能会按时间排序)
+  await loadConversations()
+}
+
+/**
  * 处理"发送消息"
- * - 没有激活会话: 调 createConversation(query) 创建会话, 加载消息, 选中新会话
- * - 已有会话: 调 addMessage(conversationId, query) 追加消息
- * @param {string} query 用户提交的查询文本 (已 trim)
+ * - 没有激活会话: 调 createConversation(text) 创建会话, 加载消息, 选中新会话
+ * - 已有会话: 调 addMessage(conversationId, text) 追加消息
+ * - 失败时回滚乐观追加的临时用户消息
+ *
+ * @param {string} query - 用户提交的查询文本 (已 trim)
+ * @returns {Promise<void>}
  */
 async function handleSend(query) {
   const text = (query || '').trim()
@@ -465,29 +510,13 @@ async function handleSend(query) {
   await scrollToBottom()
 
   try {
-    if (!activeConversationId.value) {
-      // 第一次: 创建会话
-      const conv = await createConversation(text)
-      const newId = conv?.id
-      if (!newId) {
-        throw new Error('后端未返回会话 ID')
-      }
-      // 选中新会话
-      activeConversationId.value = newId
-      // 重新拉取该会话的消息 (含后端可能返回的 user + assistant 完整消息)
-      await loadMessages(newId)
-      // 刷新侧边栏列表 (后端可能会按时间排序)
-      await loadConversations()
+    if (activeConversationId.value) {
+      await appendMessageToConversation(activeConversationId.value, text)
     } else {
-      // 后续: 追加消息
-      await addMessage(activeConversationId.value, text)
-      // 重新拉取消息以获取后端可能返回的最新状态
-      await loadMessages(activeConversationId.value)
-      // 刷新侧边栏以更新 last_msg_at / title 等
-      await loadConversations()
+      await startNewConversation(text)
     }
   } catch (e) {
-    toast.error(`发送失败: ${e?.message || '未知错误'}`)
+    toast.error(`发送失败: ${getErrorMessage(e, '未知错误')}`)
     // 回滚本地乐观追加
     messages.value = messages.value.filter((m) => m.id !== tempUserMsg.id)
   } finally {
@@ -498,7 +527,9 @@ async function handleSend(query) {
 
 /**
  * 处理"模型切换"
- * @param {string} value 新的模型标识
+ *
+ * @param {string} value - 新的模型标识
+ * @returns {void}
  */
 function handleModelChange(value) {
   if (value) {

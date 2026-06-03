@@ -189,7 +189,8 @@ marked.use({ renderer })
 /**
  * 转义 HTML 特殊字符
  * 防止非代码块区域的原始文本被错误解析为 HTML
- * @param {string} str 原始字符串
+ *
+ * @param {string} str - 原始字符串
  * @returns {string} 转义后的字符串
  */
 function escapeHtml(str) {
@@ -201,23 +202,21 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;')
 }
 
-// ======================
-// Props
-// ======================
 /**
  * 消息数据对象
+ *
  * @typedef {Object} SourceItem
- * @property {string} doc_title  来源文档标题
- * @property {string} source_id  来源 ID
- * @property {string} source_type 来源类型
- * @property {number} [score]    相似度分数
+ * @property {string} doc_title  - 来源文档标题
+ * @property {string} source_id  - 来源 ID
+ * @property {string} source_type - 来源类型
+ * @property {number} [score]    - 相似度分数
  *
  * @typedef {Object} MessageItem
- * @property {string} id         消息唯一 ID
- * @property {'user'|'assistant'} role  消息角色
- * @property {string} content    消息内容 (Markdown 原文)
- * @property {SourceItem[]} [sources]  来源列表 (仅 assistant 可能存在)
- * @property {string} created_at ISO 格式创建时间
+ * @property {string} id         - 消息唯一 ID
+ * @property {'user'|'assistant'} role  - 消息角色
+ * @property {string} content    - 消息内容 (Markdown 原文)
+ * @property {SourceItem[]} [sources]  - 来源列表 (仅 assistant 可能存在)
+ * @property {string} created_at - ISO 格式创建时间
  */
 const props = defineProps({
   message: {
@@ -234,21 +233,16 @@ const props = defineProps({
   },
 })
 
-// ======================
-// 内部状态
-// ======================
-/**
- * 复制状态
- * - 'idle':    默认 (显示 "复制")
- * - 'copied':  已复制 (显示 "已复制" 提示 2 秒)
- */
-const copyState = ref('idle')
+/** 复制状态: 'idle' 默认, 'copied' 已复制 */
+const COPY_STATE = Object.freeze({
+  IDLE: 'idle',
+  COPIED: 'copied',
+})
+const copyState = ref(COPY_STATE.IDLE)
 /** 复制反馈定时器 ID, 用于在卸载或重复点击时清理 */
 let copyTimer = null
-
-// ======================
-// 计算属性
-// ======================
+/** "已复制" 提示持续时间 (毫秒) */
+const COPIED_HINT_DURATION_MS = 2000
 
 /** 是否为用户消息 */
 const isUser = computed(() => props.message.role === 'user')
@@ -308,9 +302,43 @@ const formattedTime = computed(() => {
   return `${hh}:${mm}`
 })
 
-// ======================
-// 方法
-// ======================
+/**
+ * 清除复制反馈定时器
+ *
+ * @returns {void}
+ */
+function clearCopyTimer() {
+  if (copyTimer) {
+    clearTimeout(copyTimer)
+    copyTimer = null
+  }
+}
+
+/**
+ * 复制原文到剪贴板 (使用临时 textarea + execCommand)
+ * 兜底方案, 用于 navigator.clipboard 不可用时 (例如非安全上下文).
+ *
+ * @param {string} text - 待复制的文本
+ * @returns {boolean} 是否复制成功
+ */
+function legacyCopy(text) {
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.setAttribute('readonly', '')
+  ta.style.position = 'absolute'
+  ta.style.left = '-9999px'
+  document.body.appendChild(ta)
+  ta.select()
+  let ok = false
+  try {
+    ok = document.execCommand('copy')
+  } catch (e) {
+    ok = false
+  } finally {
+    document.body.removeChild(ta)
+  }
+  return ok
+}
 
 /**
  * 复制原文到剪贴板
@@ -318,6 +346,8 @@ const formattedTime = computed(() => {
  * - 兜底使用临时 textarea + document.execCommand('copy')
  * - 成功后切换 copyState 为 'copied', 2 秒后还原
  * - 失败时静默处理, 不抛异常 (避免影响用户浏览)
+ *
+ * @returns {Promise<void>}
  */
 async function handleCopy() {
   const text = props.message.content || ''
@@ -327,36 +357,20 @@ async function handleCopy() {
       await navigator.clipboard.writeText(text)
       success = true
     } else {
-      // 兜底方案: 使用 textarea + execCommand
-      const ta = document.createElement('textarea')
-      ta.value = text
-      ta.setAttribute('readonly', '')
-      ta.style.position = 'absolute'
-      ta.style.left = '-9999px'
-      document.body.appendChild(ta)
-      ta.select()
-      try {
-        success = document.execCommand('copy')
-      } catch (e) {
-        success = false
-      } finally {
-        document.body.removeChild(ta)
-      }
+      success = legacyCopy(text)
     }
   } catch (e) {
     success = false
   }
 
   if (success) {
-    copyState.value = 'copied'
+    copyState.value = COPY_STATE.COPIED
     // 清理旧定时器, 避免快速重复点击时状态错乱
-    if (copyTimer) {
-      clearTimeout(copyTimer)
-    }
+    clearCopyTimer()
     copyTimer = setTimeout(() => {
-      copyState.value = 'idle'
+      copyState.value = COPY_STATE.IDLE
       copyTimer = null
-    }, 2000)
+    }, COPIED_HINT_DURATION_MS)
   }
 }
 
@@ -364,22 +378,16 @@ async function handleCopy() {
 watch(
   () => props.message.content,
   () => {
-    if (copyState.value === 'copied') {
-      if (copyTimer) {
-        clearTimeout(copyTimer)
-        copyTimer = null
-      }
-      copyState.value = 'idle'
+    if (copyState.value === COPY_STATE.COPIED) {
+      clearCopyTimer()
+      copyState.value = COPY_STATE.IDLE
     }
   },
 )
 
 // 组件卸载时清理定时器, 防止内存泄漏
 onBeforeUnmount(() => {
-  if (copyTimer) {
-    clearTimeout(copyTimer)
-    copyTimer = null
-  }
+  clearCopyTimer()
 })
 </script>
 

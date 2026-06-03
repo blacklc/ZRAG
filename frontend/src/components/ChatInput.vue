@@ -174,8 +174,8 @@
 /**
  * ChatInput 组件
  *
- * 对话输入区域，提供以下能力:
- * - 自动扩展 textarea (最大 6 行, 通过 scrollHeight 调整)
+ * 对话输入区域, 提供以下能力:
+ * - 自动扩展 textarea (最大 MAX_ROWS 行, 通过 scrollHeight 调整)
  * - 模型选择器 (下拉菜单, 暂不发送到后端, 仅 emit 事件)
  * - 键盘快捷键: Enter 发送, Shift+Enter 换行
  * - 发送按钮在空文本或 loading 状态时禁用
@@ -184,9 +184,13 @@
  */
 import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 
-// ======================
-// Props
-// ======================
+/** 模型选择器根节点的 data-testid, 用于外部点击关闭 */
+const MODEL_SELECTOR_TESTID = 'model-selector'
+/** textarea 最大行数 (用于自动扩展高度上限) */
+const MAX_ROWS = 6
+/** 单行高度参考值 (与 rows=1 时的 scrollHeight 对齐) */
+const SINGLE_ROW_HEIGHT = 24
+
 const props = defineProps({
   /** 双向绑定的输入文本 (v-model) */
   modelValue: {
@@ -215,18 +219,11 @@ const props = defineProps({
   },
 })
 
-// ======================
-// Emits
-// ======================
 const emit = defineEmits([
   'update:modelValue',
   'send',
   'model-change',
 ])
-
-// ======================
-// 静态配置
-// ======================
 
 /** 可选模型列表 - 静态配置, 暂不与后端联动 */
 const modelOptions = [
@@ -238,23 +235,10 @@ const modelOptions = [
   { value: 'deepseek-v4-pro',  label: 'DeepSeek V4 Pro' },
 ]
 
-/** textarea 最大行数 (用于自动扩展高度上限) */
-const MAX_ROWS = 6
-/** 单行高度参考值 (与 rows=1 时的 scrollHeight 对齐) */
-const SINGLE_ROW_HEIGHT = 24
-
-// ======================
-// 响应式状态
-// ======================
-
 /** textarea DOM 引用 */
 const textareaRef = ref(null)
 /** 模型下拉菜单开关 */
 const modelMenuOpen = ref(false)
-
-// ======================
-// 计算属性
-// ======================
 
 /** 当前选中模型的展示标签 */
 const currentModelLabel = computed(() => {
@@ -275,13 +259,8 @@ const canSend = computed(() => {
 const textareaStyle = computed(() => {
   const el = textareaRef.value
   if (!el) return { height: `${SINGLE_ROW_HEIGHT}px` }
-  // 单行基准高度 (rows=1 渲染高度)
-  const baseHeight = SINGLE_ROW_HEIGHT
-  // 上限高度
-  const maxHeight = baseHeight * MAX_ROWS
-  // 实际高度取 scrollHeight, 但不超过 maxHeight
+  const maxHeight = SINGLE_ROW_HEIGHT * MAX_ROWS
   const targetHeight = Math.min(el.scrollHeight, maxHeight)
-  // 是否达到上限, 达到则启用内部滚动
   const overflow = el.scrollHeight > maxHeight ? 'auto' : 'hidden'
   return {
     height: `${targetHeight}px`,
@@ -289,10 +268,6 @@ const textareaStyle = computed(() => {
     overflowY: overflow,
   }
 })
-
-// ======================
-// 监听器
-// ======================
 
 /**
  * 监听 modelValue 变化, 重新计算 textarea 高度
@@ -315,10 +290,6 @@ watch(
   }
 )
 
-// ======================
-// 生命周期
-// ======================
-
 /**
  * 组件挂载后绑定点击外部关闭菜单的事件,
  * 卸载时解绑避免内存泄漏.
@@ -331,10 +302,6 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', onDocumentClick)
 })
 
-// ======================
-// 方法定义
-// ======================
-
 /** 调整 textarea 高度 (触发 computed 重新读取 scrollHeight) */
 function adjustHeight() {
   // 通过访问 textareaRef.value 触发 computed 中对 scrollHeight 的读取
@@ -346,7 +313,9 @@ function adjustHeight() {
 
 /**
  * 输入事件处理: 同步 v-model
- * @param {Event} event input 事件对象
+ *
+ * @param {Event} event - input 事件对象
+ * @returns {void}
  */
 function onInput(event) {
   emit('update:modelValue', event.target.value)
@@ -356,7 +325,9 @@ function onInput(event) {
  * 键盘事件处理
  * - Enter (无 Shift): 触发 send 事件
  * - Shift+Enter: 保留默认行为 (换行)
- * @param {KeyboardEvent} event keydown 事件对象
+ *
+ * @param {KeyboardEvent} event - keydown 事件对象
+ * @returns {void}
  */
 function onKeydown(event) {
   if (event.key === 'Enter' && !event.shiftKey) {
@@ -387,7 +358,9 @@ function toggleModelMenu() {
 
 /**
  * 选择某个模型
- * @param {string} value 模型标识
+ *
+ * @param {string} value - 模型标识
+ * @returns {void}
  */
 function selectModel(value) {
   modelMenuOpen.value = false
@@ -398,14 +371,14 @@ function selectModel(value) {
 
 /**
  * 文档级点击事件: 点击菜单外部时关闭菜单
- * @param {MouseEvent} event
+ *
+ * @param {MouseEvent} event - 鼠标事件
+ * @returns {void}
  */
 function onDocumentClick(event) {
   if (!modelMenuOpen.value) return
-  const root = event.target
-  // 通过 closest 向上查找, 避免在菜单内部点击时误关闭
-  const selector = document.querySelector('[data-testid="model-selector"]')
-  if (selector && root instanceof Node && !selector.contains(root)) {
+  const selector = document.querySelector(`[data-testid="${MODEL_SELECTOR_TESTID}"]`)
+  if (selector && !selector.contains(event.target)) {
     modelMenuOpen.value = false
   }
 }

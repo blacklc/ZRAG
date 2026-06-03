@@ -259,7 +259,7 @@
 /**
  * SourcesView 页面
  *
- * 知识库来源管理页面,提供以下能力:
+ * 知识库来源管理页面, 提供以下能力:
  * - 进入页面时调用 listSources() 加载来源列表
  * - 顶部"增量摄入"/"全量摄入"按钮触发 ingestDocuments() 接口
  * - 摄入过程中显示 indeterminate 进度条
@@ -267,17 +267,23 @@
  * - 摄入失败时显示错误 Toast
  * - 加载状态显示骨架屏
  * - 空状态显示引导文案
- * - 顶部嵌入 NavBar 组件,支持暗黑模式
+ * - 顶部嵌入 NavBar 组件, 支持暗黑模式
  */
 import { ref, onMounted } from 'vue'
 import NavBar from '../components/NavBar.vue'
 import { listSources, ingestDocuments } from '../api/endpoints.js'
 
-// ======================
-// 响应式状态
-// ======================
+/** Toast 自动消失默认时长 (毫秒) */
+const DEFAULT_TOAST_DURATION_MS = 3000
+/** 时间区间阈值 (秒), 用于相对时间格式化 */
+const RELATIVE_TIME_THRESHOLDS = Object.freeze({
+  MINUTE: 60,
+  HOUR: 3600,
+  DAY: 86400,
+  WEEK: 604800,
+})
 
-/** 来源列表数据,每项包含 source_type, doc_count, last_imported */
+/** 来源列表数据, 每项包含 source_type, doc_count, last_imported */
 const sources = ref([])
 /** 列表加载状态, true 时显示骨架屏 */
 const loading = ref(false)
@@ -295,21 +301,28 @@ const toast = ref({ show: false, type: 'success', message: '' })
 /** Toast 自动消失定时器 ID, 用于手动关闭时清理 */
 let toastTimer = null
 
-// ======================
-// 方法定义
-// ======================
-
 /**
- * 显示 Toast 通知
- * @param {string} type 通知类型: 'success' | 'error'
- * @param {string} message 通知文案
- * @param {number} [duration=3000] 自动消失时长 (毫秒)
+ * 清除 Toast 自动消失定时器
+ *
+ * @returns {void}
  */
-function showToast(type, message, duration = 3000) {
+function clearToastTimer() {
   if (toastTimer) {
     clearTimeout(toastTimer)
     toastTimer = null
   }
+}
+
+/**
+ * 显示 Toast 通知
+ *
+ * @param {string} type - 通知类型: 'success' | 'error'
+ * @param {string} message - 通知文案
+ * @param {number} [duration=3000] - 自动消失时长 (毫秒)
+ * @returns {void}
+ */
+function showToast(type, message, duration = DEFAULT_TOAST_DURATION_MS) {
+  clearToastTimer()
   toast.value = { show: true, type, message }
   toastTimer = setTimeout(() => {
     toast.value.show = false
@@ -319,31 +332,36 @@ function showToast(type, message, duration = 3000) {
 
 /** 手动关闭 Toast, 清理定时器 */
 function dismissToast() {
-  if (toastTimer) {
-    clearTimeout(toastTimer)
-    toastTimer = null
-  }
+  clearToastTimer()
   toast.value.show = false
+}
+
+/**
+ * 将后端返回的来源数据规范为数组
+ * - 直接是数组: 原样返回
+ * - 包含 items 字段: 返回 items
+ * - 其它: 返回空数组
+ *
+ * @param {*} data - 后端响应
+ * @returns {Array} 规范化的来源列表
+ */
+function normalizeSources(data) {
+  if (Array.isArray(data)) return data
+  if (data && Array.isArray(data.items)) return data.items
+  return []
 }
 
 /**
  * 加载来源列表
  * - 设置 loading 标志以触发骨架屏
  * - 异常时显示错误 Toast, 并保留现有列表数据
+ *
  * @returns {Promise<void>}
  */
 async function loadSources() {
   loading.value = true
   try {
-    const data = await listSources()
-    // 后端可能直接返回数组, 也可能返回 { items: [] } 结构
-    if (Array.isArray(data)) {
-      sources.value = data
-    } else if (data && Array.isArray(data.items)) {
-      sources.value = data.items
-    } else {
-      sources.value = []
-    }
+    sources.value = normalizeSources(await listSources())
   } catch (err) {
     showToast('error', `加载来源列表失败: ${err.message || '未知错误'}`)
   } finally {
@@ -357,7 +375,8 @@ async function loadSources() {
  * 2. 调用 ingestDocuments 接口 (source_type: null 表示全部来源)
  * 3. 完成后重新拉取列表并展示报告
  * 4. 失败时显示错误 Toast
- * @param {boolean} full 是否全量摄入
+ *
+ * @param {boolean} full - 是否全量摄入
  * @returns {Promise<void>}
  */
 async function handleIngest(full) {
@@ -379,6 +398,25 @@ async function handleIngest(full) {
 }
 
 /**
+ * 将相对时间值格式化为人类可读字符串
+ *
+ * @param {number} diffSec - 与当前时间的差值 (秒)
+ * @param {Date} date - 原始 Date 对象
+ * @returns {string} 相对时间字符串
+ */
+function formatRelativeDiff(diffSec, date) {
+  const { MINUTE, HOUR, DAY, WEEK } = RELATIVE_TIME_THRESHOLDS
+  if (diffSec < MINUTE) return '刚刚'
+  if (diffSec < HOUR) return `${Math.floor(diffSec / MINUTE)} 分钟前`
+  if (diffSec < DAY) return `${Math.floor(diffSec / HOUR)} 小时前`
+  if (diffSec < WEEK) return `${Math.floor(diffSec / DAY)} 天前`
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+/**
  * 将 ISO 时间格式化为相对时间字符串
  * - 1 分钟内: 刚刚
  * - 1 小时内: N 分钟前
@@ -386,28 +424,17 @@ async function handleIngest(full) {
  * - 7 天内: N 天前
  * - 超过 7 天: 返回 yyyy-MM-dd 形式
  * - 空值或非法值: 返回空串
- * @param {string} isoTime ISO 格式时间字符串
+ *
+ * @param {string} isoTime - ISO 格式时间字符串
  * @returns {string} 相对时间字符串
  */
 function formatRelativeTime(isoTime) {
   if (!isoTime) return ''
   const date = new Date(isoTime)
   if (Number.isNaN(date.getTime())) return ''
-  const now = Date.now()
-  const diffSec = Math.floor((now - date.getTime()) / 1000)
-  if (diffSec < 60) return '刚刚'
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分钟前`
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} 小时前`
-  if (diffSec < 604800) return `${Math.floor(diffSec / 86400)} 天前`
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
+  const diffSec = Math.floor((Date.now() - date.getTime()) / 1000)
+  return formatRelativeDiff(diffSec, date)
 }
-
-// ======================
-// 生命周期
-// ======================
 
 /** 组件挂载时加载来源列表 */
 onMounted(() => {

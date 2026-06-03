@@ -48,16 +48,21 @@ import { useToast } from '../composables/useToast.js'
 
 const { toasts, dismiss } = useToast()
 
+/** 各通知类型对应的 Tailwind 背景色类 */
+const TOAST_BG_CLASS = Object.freeze({
+  success: 'bg-green-500 dark:bg-green-600',
+  error: 'bg-red-500 dark:bg-red-600',
+  info: 'bg-blue-500 dark:bg-blue-600',
+})
+
 /**
- * 根据通知类型返回 Tailwind 背景色类.
+ * 根据通知类型返回 Tailwind 背景色类
  *
  * @param {string} type - 'success' | 'error' | 'info'
  * @returns {string} 背景色类名
  */
 function bgClass(type) {
-  if (type === 'success') return 'bg-green-500 dark:bg-green-600'
-  if (type === 'error') return 'bg-red-500 dark:bg-red-600'
-  return 'bg-blue-500 dark:bg-blue-600'
+  return TOAST_BG_CLASS[type] || TOAST_BG_CLASS.info
 }
 </script>
 
