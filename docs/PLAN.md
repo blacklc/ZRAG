@@ -155,9 +155,9 @@
 | 7 | BgeSmallEmbedder | ✅ | 4 | `71b03ff` |
 | 8 | DocumentSource ABC | ✅ | 6 | `6fe032a` |
 | 9 | MacNotesSource | ✅ | 13 | `e9c0767` |
-| 10 | ChunkingStrategy ABC | ⬜ | - | - |
-| 11 | 具体 ChunkingStrategy | ⬜ | - | - |
-| 12 | IngestionPipeline | ⬜ | - | - |
+| 10 | ChunkingStrategy ABC | ✅ | 6 | `4d53919` |
+| 11 | 具体 ChunkingStrategy | ✅ | 9 | `10dfa8b` |
+| 12 | IngestionPipeline | ✅ | 9 | `711c4a1` |
 | 13 | LLMProvider ABC | ⬜ | - | - |
 | 14 | LLMGatewayProvider | ⬜ | - | - |
 | 15 | Retriever（Hybrid Search + RRF） | ⬜ | - | - |
