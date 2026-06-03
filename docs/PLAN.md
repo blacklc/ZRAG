@@ -171,14 +171,14 @@
 | 23 | IngestGuard | ✅ | 4 | `fecdef7` |
 | 24 | CORS + CSRF 配置 | ✅ | 3 | `fecdef7` |
 | 25 | POST /v1/documents/ingest + GET /v1/sources | ✅ | 15 | `852432a` |
-| 26 | POST /v1/conversations | ✅ | 16 | - |
+| 26 | POST /v1/conversations | ✅ | 16 | `c46474e` |
 | 27 | POST /v1/conversations/{id}/messages | ✅ | (含在 26) | - |
 | 28 | GET /v1/conversations | ✅ | (含在 26) | `852432a` |
 | 29 | GET /v1/conversations/{id}/messages | ✅ | (含在 28) | `852432a` |
 | 30 | DELETE /v1/conversations/{id} | ✅ | (含在 28) | `852432a` |
 | 31 | GET /v1/health/live | ✅ | 4 | `852432a` |
 | 32 | GET /v1/health/ready | ✅ | (含在 31) | `852432a` |
-| 33 | Vue 项目初始化 | ⬜ | - | - |
+| 33 | Vue 项目初始化 | ✅ | - | - |
 | 34 | NavBar 组件 | ⬜ | - | - |
 | 35 | ChatInput 组件 | ⬜ | - | - |
 | 36 | ChatMessage 组件 | ⬜ | - | - |
