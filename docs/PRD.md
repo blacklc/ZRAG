@@ -232,6 +232,6 @@ CREATE TABLE messages (id TEXT PK, conversation_id TEXT FK, role TEXT, content T
 
 - 参考项目：zonebank（DRF 模式、异常处理、uWSGI 配置）
 - LiteLLM Gateway 配置位于 ~/.claude/litellm/config.yaml，已配置 smart-router 负载均衡
-- 整个项目在同一 Git 仓库中（zrag/ 后端 + zrag/frontend/ 前端）
+- 整个项目在同一 Git 仓库中（zrag/ 后端 + frontend/ 前端）
 - 全部模块设计方案及各模块代码片段记录于 docs/QA.md（Q0-Q34）
 - 全程无 LangChain/LlamaIndex/FastAPI/手写 BM25/Jinja2 服务端渲染

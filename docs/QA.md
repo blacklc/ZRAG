@@ -1077,7 +1077,7 @@ def create_llm(config: dict) -> LLMProvider:
 | Prompt 构建 | `zrag/retrieval/prompt_builder.py` |
 | LLM 接口 | `zrag/llm/base.py`, `gateway.py`, `__init__.py` |
 | API | `zrag/api/views.py`, `serializers.py`, `urls.py`, `auth.py`, `response.py`, `middleware.py`, `exceptions.py`, `exception_handler.py`, `ingest_guard.py` |
-| Web UI | `zrag/frontend/` (Vue 3 + Vite + Tailwind CSS) |
+| Web UI | `frontend/` (Vue 3 + Vite + Tailwind CSS) |
 | CLI | `zrag/cli/`, `zrag/__main__.py` |
 
 ### 已完成设计的模块
@@ -2044,7 +2044,7 @@ input { @apply rounded-xl border border-gray-200 bg-gray-50/50
 ### 文件结构
 
 ```
-zrag/frontend/
+frontend/
 ├── index.html
 ├── package.json
 ├── vite.config.js
