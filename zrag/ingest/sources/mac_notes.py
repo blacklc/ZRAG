@@ -38,9 +38,9 @@ class MacNotesSource(DocumentSource):
     def fetch_batch(self, batch_size: int = 10) -> Iterator[list[RawDocument]]:
         """分批获取备忘录
 
-        通过 AppleScript 获取备忘录列表, 逐条读取内容后分批返回。
-        若 full_sync 为 True 则遍历所有文件夹获取备忘录;
-        否则根据 folder_name 筛选指定文件夹（folder_name 为 None 时也获取所有文件夹）。
+        使用合并的 AppleScript 脚本一次性获取每个文件夹内所有笔记的 ID/名称/正文。
+        full_sync 模式下先获取全部文件夹列表再逐个文件夹导出。
+        单文件夹模式只需一次 osascript 调用。
 
         @param batch_size: 每批次最大备忘录数量, defaults to 10
         @type  batch_size: int, optional
@@ -59,21 +59,8 @@ class MacNotesSource(DocumentSource):
             folders = [self.folder_name]
 
         for folder in folders:
-            notes = self._get_notes_in_folder(folder)
-            for note_id, note_name in notes:
-                html_content = self._get_note_content(note_id)
-                if html_content is None:
-                    continue
-                markdown_content = self._html_to_markdown(html_content)
-                content_hash = self._compute_hash(markdown_content)
-                doc = RawDocument(
-                    source_id=note_id,
-                    source_type=self.source_type,
-                    content=markdown_content,
-                    content_hash=content_hash,
-                    metadata={"folder": folder, "name": note_name},
-                )
-                all_documents.append(doc)
+            folder_docs = self._get_folder_data(folder)
+            all_documents.extend(folder_docs)
 
         for i in range(0, len(all_documents), batch_size):
             yield all_documents[i:i + batch_size]
@@ -111,24 +98,34 @@ end tell
         folders = [f.strip() for f in output.strip().split(", ") if f.strip()]
         return folders
 
-    def _get_notes_in_folder(self, folder_name: str) -> list[tuple[str, str]]:
-        """获取指定文件夹内所有备忘录的 ID 和名称
+    def _get_folder_data(self, folder_name: str) -> list[RawDocument]:
+        """获取指定文件夹内所有备忘录的完整数据
 
-        通过 AppleScript 调用 Notes.app 获取指定文件夹中备忘录的 id 和 name。
+        通过一次合并的 AppleScript 调用, 批量获取文件夹内所有笔记的 ID、名称和正文,
+        避免逐条获取带来的大量 subprocess 开销。
+
+        AppleScript 返回值格式:
+          每条笔记占一行, id§§§name§§§body
+        行以换行分隔。
 
         @param folder_name: 文件夹名称
         @type  folder_name: str
 
-        @return: 备忘录 (id, name) 元组列表
-        @type:   list[tuple[str, str]]
+        @return: 该文件夹内所有备忘录的 RawDocument 列表
+        @type:   list[RawDocument]
 
         @raises: AppleScript 调用失败
         @type:   subprocess.CalledProcessError
         """
         script = f"""
 tell application "Notes"
-    set noteList to id of notes of folder "{folder_name}"
-    return noteList
+    set output to ""
+    repeat with n in notes of folder "{folder_name}"
+        try
+            set output to output & id of n & "§§§" & name of n & "§§§" & body of n & "¶¶¶"
+        end try
+    end repeat
+    return output
 end tell
 """
         try:
@@ -139,62 +136,25 @@ end tell
         except subprocess.CalledProcessError:
             return []
 
-        ids = [n.strip() for n in output.strip().split(", ") if n.strip()]
-
-        result = []
-        for note_id in ids:
-            name = self._get_note_name(note_id)
-            if name is not None:
-                result.append((note_id, name))
-        return result
-
-    def _get_note_name(self, note_id: str) -> str | None:
-        """通过 AppleScript 获取单条备忘录的名称
-
-        @param note_id: 备忘录 ID
-        @type  note_id: str
-
-        @return: 备忘录名称, 获取失败返回 None
-        @type:   str | None
-        """
-        script = f"""
-tell application "Notes"
-    set noteName to name of note id "{note_id}"
-    return noteName
-end tell
-"""
-        try:
-            output = subprocess.check_output(
-                ["osascript", "-e", script],
-                text=True,
-            )
-            return output.strip()
-        except subprocess.CalledProcessError:
-            return None
-
-    def _get_note_content(self, note_id: str) -> str | None:
-        """通过 AppleScript 获取单条备忘录的 HTML 内容
-
-        @param note_id: 备忘录 ID
-        @type  note_id: str
-
-        @return: 备忘录的 HTML 内容字符串, 获取失败返回 None
-        @type:   str | None
-        """
-        script = f"""
-tell application "Notes"
-    set noteContent to body of note id "{note_id}"
-    return noteContent
-end tell
-"""
-        try:
-            output = subprocess.check_output(
-                ["osascript", "-e", script],
-                text=True,
-            )
-            return output
-        except subprocess.CalledProcessError:
-            return None
+        documents: list[RawDocument] = []
+        for entry in output.strip().split("¶¶¶"):
+            entry = entry.strip()
+            if not entry:
+                continue
+            parts = entry.split("§§§", 2)
+            if len(parts) != 3:
+                continue
+            note_id, note_name, html_body = parts
+            markdown_content = self._html_to_markdown(html_body)
+            content_hash = self._compute_hash(markdown_content)
+            documents.append(RawDocument(
+                source_id=note_id,
+                source_type=self.source_type,
+                content=markdown_content,
+                content_hash=content_hash,
+                metadata={"folder": folder_name, "name": note_name},
+            ))
+        return documents
 
     def _html_to_markdown(self, html: str) -> str:
         """将 HTML 转换为 Markdown 格式（纯正则, 无外部依赖）
