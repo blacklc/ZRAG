@@ -171,9 +171,9 @@
 | 23 | IngestGuard | ✅ | 4 | `fecdef7` |
 | 24 | CORS + CSRF 配置 | ✅ | 3 | `fecdef7` |
 | 25 | POST /v1/documents/ingest + GET /v1/sources | ✅ | 15 | `852432a` |
-| 26 | POST /v1/conversations | ⬜ | - | - |
-| 27 | POST /v1/conversations/{id}/messages | ⬜ | - | - |
-| 28 | GET /v1/conversations | ✅ | 6 | `852432a` |
+| 26 | POST /v1/conversations | ✅ | 16 | - |
+| 27 | POST /v1/conversations/{id}/messages | ✅ | (含在 26) | - |
+| 28 | GET /v1/conversations | ✅ | (含在 26) | `852432a` |
 | 29 | GET /v1/conversations/{id}/messages | ✅ | (含在 28) | `852432a` |
 | 30 | DELETE /v1/conversations/{id} | ✅ | (含在 28) | `852432a` |
 | 31 | GET /v1/health/live | ✅ | 4 | `852432a` |

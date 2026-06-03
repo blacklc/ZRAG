@@ -8,10 +8,13 @@ from zrag.api.views import ConversationViewSet, DocumentViewSet
 from zrag.api.health import HealthViewSet
 
 conversation_urls = [
-    re_path(r'^v1/conversations$', ConversationViewSet.as_view({'get': 'list'})),
+    re_path(
+        r'^v1/conversations$',
+        ConversationViewSet.as_view({'get': 'list', 'post': 'create'}),
+    ),
     re_path(
         r'^v1/conversations/(?P<conversation_id>[^/]+)/messages$',
-        ConversationViewSet.as_view({'get': 'get_messages'}),
+        ConversationViewSet.as_view({'get': 'get_messages', 'post': 'add_message'}),
     ),
     re_path(
         r'^v1/conversations/(?P<conversation_id>[^/]+)$',

@@ -20,3 +20,17 @@ class IngestSerializer(serializers.Serializer):
         max_length=100, default=None, required=False, allow_null=True,
     )
     full = serializers.BooleanField(default=False, required=False)
+
+
+class ConversationQuerySerializer(serializers.Serializer):
+    """会话/消息查询请求参数校验序列化器
+
+    校验 POST /v1/conversations 和 POST /v1/conversations/{id}/messages
+    请求体中的参数。
+
+    @param query: 用户查询文本, 最长 2000 字符
+    @type  query: str
+    """
+    query = serializers.CharField(
+        max_length=2000, required=True, allow_blank=False,
+    )
