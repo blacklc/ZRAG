@@ -159,7 +159,7 @@
 | 11 | 具体 ChunkingStrategy | ✅ | 9 | `10dfa8b` |
 | 12 | IngestionPipeline | ✅ | 9 | `711c4a1` |
 | 13 | LLMProvider ABC | ✅ | 5 | `73085e7` |
-| 14 | LLMGatewayProvider | ⏳ HITL | - | - |
+| 14 | LLMGatewayProvider | ✅ | 6 | `852432a` |
 | 15 | Retriever（Hybrid Search + RRF） | ✅ | 5 | `c1ff991` |
 | 16 | PromptBuilder | ✅ | 4 | `c1ff991` |
 | 17 | APIResponse 包装器 | ✅ | 5 | `c1ff991` |
@@ -170,14 +170,14 @@
 | 22 | 速率限制 | ✅ | 3 | `fecdef7` |
 | 23 | IngestGuard | ✅ | 4 | `fecdef7` |
 | 24 | CORS + CSRF 配置 | ✅ | 3 | `fecdef7` |
-| 25 | POST /v1/documents/ingest + GET /v1/sources | ⬜ | - | - |
+| 25 | POST /v1/documents/ingest + GET /v1/sources | ✅ | 15 | `852432a` |
 | 26 | POST /v1/conversations | ⬜ | - | - |
 | 27 | POST /v1/conversations/{id}/messages | ⬜ | - | - |
-| 28 | GET /v1/conversations | ⬜ | - | - |
-| 29 | GET /v1/conversations/{id}/messages | ⬜ | - | - |
-| 30 | DELETE /v1/conversations/{id} | ⬜ | - | - |
-| 31 | GET /v1/health/live | ⬜ | - | - |
-| 32 | GET /v1/health/ready | ⬜ | - | - |
+| 28 | GET /v1/conversations | ✅ | 6 | `852432a` |
+| 29 | GET /v1/conversations/{id}/messages | ✅ | (含在 28) | `852432a` |
+| 30 | DELETE /v1/conversations/{id} | ✅ | (含在 28) | `852432a` |
+| 31 | GET /v1/health/live | ✅ | 4 | `852432a` |
+| 32 | GET /v1/health/ready | ✅ | (含在 31) | `852432a` |
 | 33 | Vue 项目初始化 | ⬜ | - | - |
 | 34 | NavBar 组件 | ⬜ | - | - |
 | 35 | ChatInput 组件 | ⬜ | - | - |
