@@ -38,6 +38,7 @@ class SQLiteStore:
             self._conn = sqlite3.connect(self._db_path)
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.isolation_level = None
         return self._conn
 
     def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
@@ -280,3 +281,25 @@ class SQLiteStore:
         if self._conn is not None:
             self._conn.close()
             self._conn = None
+
+
+# === 模块级单例 ===
+_sqlite_store: 'SQLiteStore | None' = None
+
+def get_sqlite_store(db_path: str = 'data/zrag.db') -> SQLiteStore:
+    """获取 SQLiteStore 单例实例
+
+    使用模块级全局变量缓存 SQLiteStore 实例, 确保整个应用生命周期内只创建一个实例。
+    若首次调用时实例尚未创建, 则根据传入的 db_path 创建新实例。
+    后续调用会忽略 db_path 参数, 直接返回已缓存的实例。
+
+    @param db_path: 数据库文件路径, 仅在首次创建实例时生效, defaults to 'data/zrag.db'
+    @type  db_path: str, optional
+
+    @return: SQLiteStore 单例实例
+    @type:   SQLiteStore
+    """
+    global _sqlite_store
+    if _sqlite_store is None:
+        _sqlite_store = SQLiteStore(db_path)
+    return _sqlite_store

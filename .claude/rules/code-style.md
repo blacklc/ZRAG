@@ -179,6 +179,11 @@ class BaseDecreasePolicy(abc.ABC):
 - 在功能类中不进行日志记录, 只进行异常捕获和向上抛出.
 - 日志记录只实现在最外层的调用代码中.
 
+## 日志格式
+若用户没有特殊要求, 则使用如下日志格式:
+1. format: ```"%(asctime)s [%(levelname)s] %(thread)d %(funcName)s:%(lineno)d %(message)s"```
+2. handler: ```logging.handlers.TimedRotatingFileHandler```. 相关参数为: when='D', interval=1, backupCount=7, encoding='utf-8'.
+
 ## 异常捕获
 最外层的调用代码要保证存在一个“兜底”形式的异常捕获, 保证不会丢失任何来自于内层被调用者抛出的异常.
 

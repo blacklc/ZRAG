@@ -1,6 +1,7 @@
 """切片 19 — BaseZragException + Handler Registry 测试"""
 
 import pytest
+from rest_framework.exceptions import AuthenticationFailed, ParseError, ValidationError
 from rest_framework.response import Response
 
 from zrag.api.exception_handler import (
@@ -109,21 +110,24 @@ class TestHandlerRegistry:
             LLMCallException,
             IngestionException,
         }
-        assert registered_classes == expected
+        # DRF 内置异常也应在注册表中
+        for drf_exc in [AuthenticationFailed, ParseError, ValidationError]:
+            assert drf_exc in registered_classes, f"Missing {drf_exc}"
+        assert registered_classes >= expected
 
     def test_registry_contains_all_handlers(self):
         """注册表包含所有处理器类型的映射条目"""
         registered_handler_classes = {
             entry["handler_class"] for entry in error_type
         }
-        expected = {
+        expected_zrag = {
             UnauthorizedHandler,
             NotFoundHandler,
             RetrievalHandler,
             LLMCallHandler,
             IngestionHandler,
         }
-        assert registered_handler_classes == expected
+        assert registered_handler_classes >= expected_zrag
 
     def test_registry_is_sorted_by_specificity(self):
         """注册表优先级排序: 子类在前, 基类在后"""

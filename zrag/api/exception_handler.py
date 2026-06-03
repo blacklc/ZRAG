@@ -12,6 +12,12 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Type
 
+from rest_framework.exceptions import (
+    APIException,
+    AuthenticationFailed,
+    ParseError,
+    ValidationError,
+)
 from rest_framework.response import Response
 
 from zrag.api.exceptions import (
@@ -194,13 +200,151 @@ class IngestionHandler(BaseAPIExceptionHandler):
         return _build_error_response(exc, context)
 
 
+class DRFAuthenticationFailedHandler(BaseAPIExceptionHandler):
+    """DRF AuthenticationFailed 处理器
+
+    DRF 内置的 AuthenticationFailed 不是 BaseZragException 的子类,
+    需要单独处理以确保 401 响应格式与项目统一。
+    """
+
+    def handle(self, exc: Exception, context: Dict[str, Any]) -> Response:
+        """处理 DRF AuthenticationFailed
+
+        @param exc: 异常实例
+        @type  exc: Exception
+        @param context: 异常上下文信息
+        @type  context: dict
+
+        @return: 401 DRF Response 对象
+        @rtype:  rest_framework.response.Response
+        """
+        request = context.get("request")
+        request_id = ""
+        if request:
+            request_id = request.META.get("X-Request-ID", "")
+        body = {
+            "Message": str(exc),
+            "Data": None,
+            "RequestID": request_id,
+            "ErrorCode": "UNAUTHORIZED",
+        }
+        return Response(body, status=401)
+
+
+class DRFParseErrorHandler(BaseAPIExceptionHandler):
+    """DRF ParseError 处理器
+
+    处理请求体解析失败（如无效 JSON）的情况。
+    """
+
+    def handle(self, exc: Exception, context: Dict[str, Any]) -> Response:
+        """处理 DRF ParseError
+
+        @param exc: 异常实例
+        @type  exc: Exception
+        @param context: 异常上下文信息
+        @type  context: dict
+
+        @return: 400 DRF Response 对象
+        @rtype:  rest_framework.response.Response
+        """
+        request = context.get("request")
+        request_id = ""
+        if request:
+            request_id = request.META.get("X-Request-ID", "")
+        body = {
+            "Message": str(exc),
+            "Data": None,
+            "RequestID": request_id,
+            "ErrorCode": "PARSE-ERROR",
+        }
+        return Response(body, status=400)
+
+
+class DRFValidationErrorHandler(BaseAPIExceptionHandler):
+    """DRF ValidationError 处理器
+
+    处理请求参数校验失败的情况。
+    """
+
+    def handle(self, exc: Exception, context: Dict[str, Any]) -> Response:
+        """处理 DRF ValidationError
+
+        @param exc: 异常实例
+        @type  exc: Exception
+        @param context: 异常上下文信息
+        @type  context: dict
+
+        @return: 400 DRF Response 对象
+        @rtype:  rest_framework.response.Response
+        """
+        request = context.get("request")
+        request_id = ""
+        if request:
+            request_id = request.META.get("X-Request-ID", "")
+        body = {
+            "Message": str(exc),
+            "Data": None,
+            "RequestID": request_id,
+            "ErrorCode": "VALIDATION-ERROR",
+        }
+        return Response(body, status=400)
+
+
+class DRFGenericAPIExceptionHandler(BaseAPIExceptionHandler):
+    """DRF APIException 通用处理器（兜底）
+
+    处理除上述已注册类型之外的其他 DRF APIException 子类。
+    从 exc.status_code 获取 HTTP 状态码。
+    """
+
+    def handle(self, exc: Exception, context: Dict[str, Any]) -> Response:
+        """处理通用的 DRF APIException
+
+        @param exc: 异常实例（必须是 APIException 的子类）
+        @type  exc: Exception
+        @param context: 异常上下文信息
+        @type  context: dict
+
+        @return: 根据 exc.status_code 确定状态码的 DRF Response 对象
+        @rtype:  rest_framework.response.Response
+        """
+        request = context.get("request")
+        request_id = ""
+        if request:
+            request_id = request.META.get("X-Request-ID", "")
+        status_code = getattr(exc, "status_code", 500)
+        body = {
+            "Message": str(exc),
+            "Data": None,
+            "RequestID": request_id,
+            "ErrorCode": "API-ERROR",
+        }
+        return Response(body, status=status_code)
+
+
 # 错误类型注册表
 # 按优先级排序: 越具体的异常类型越靠前
 error_type: List[Dict[str, Any]] = [
     {
+        "exception_class": AuthenticationFailed,
+        "handler_class": DRFAuthenticationFailedHandler,
+        "handler_instance": DRFAuthenticationFailedHandler(),
+    },
+    {
         "exception_class": UnauthorizedException,
         "handler_class": UnauthorizedHandler,
         "handler_instance": UnauthorizedHandler(),
+    },
+    {
+        "exception_class": ParseError,
+        "handler_class": DRFParseErrorHandler,
+        "handler_instance": DRFParseErrorHandler(),
+    },
+    {
+        "exception_class": ValidationError,
+        "handler_class": DRFValidationErrorHandler,
+        "handler_instance": DRFValidationErrorHandler(),
     },
     {
         "exception_class": NotFoundException,
@@ -221,6 +365,11 @@ error_type: List[Dict[str, Any]] = [
         "exception_class": IngestionException,
         "handler_class": IngestionHandler,
         "handler_instance": IngestionHandler(),
+    },
+    {
+        "exception_class": APIException,
+        "handler_class": DRFGenericAPIExceptionHandler,
+        "handler_instance": DRFGenericAPIExceptionHandler(),
     },
 ]
 

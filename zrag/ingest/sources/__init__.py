@@ -1,1 +1,6 @@
-"""zrag.ingest.sources — 文档数据源模块"""
+from zrag.ingest.sources.mac_notes import MacNotesSource
+
+SOURCE_REGISTRY = {
+    "mac_notes": MacNotesSource,
+}
+

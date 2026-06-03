@@ -2550,12 +2550,3 @@ from sentence_transformers import SentenceTransformer
 SentenceTransformer('BAAI/bge-small-zh-v1.5')
 "
 ```
-
-### 切片 7 完成状态
-
-| 文件 | 说明 |
-|------|------|
-| `zrag/embed/base.py` | EmbeddingModel ABC（切片 6） |
-| `zrag/embed/local.py` | BgeSmallEmbedder 实现 |
-| `tests/test_08_bge_embedder.py` | 4 个测试（维度/一致性/属性） |
-| 测试总数 | 45（现存 41 + 新增 4） |
