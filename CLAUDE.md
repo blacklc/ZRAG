@@ -50,6 +50,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 疑难问题记录
 当解决了一个过程繁杂的问题后, 应当使用subagent将问题本身以及解决过程详细的记录下来.
 
+## 临时性问题
+对于用户提出的临时性问题, 如果需要进行验证、安装、查询、修改代码、测试等与主会话操作时, 请使用subagent来辅助进行思考和回答.
+
 ## 实现路径
 按 `docs/PLAN.md` 的 45 个切片顺序实现，不能跳过依赖的上游切片。每个 AFK 切片必须自带测试代码。测试连续 3 次不通过则自动升级为 HITL。
 
