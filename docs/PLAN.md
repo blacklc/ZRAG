@@ -158,18 +158,18 @@
 | 10 | ChunkingStrategy ABC | ✅ | 6 | `4d53919` |
 | 11 | 具体 ChunkingStrategy | ✅ | 9 | `10dfa8b` |
 | 12 | IngestionPipeline | ✅ | 9 | `711c4a1` |
-| 13 | LLMProvider ABC | ⬜ | - | - |
-| 14 | LLMGatewayProvider | ⬜ | - | - |
-| 15 | Retriever（Hybrid Search + RRF） | ⬜ | - | - |
-| 16 | PromptBuilder | ⬜ | - | - |
-| 17 | APIResponse 包装器 | ⬜ | - | - |
-| 18 | RequestIDMiddleware | ⬜ | - | - |
-| 19 | BaseZragException + Handler Registry | ⬜ | - | - |
-| 20 | 具体 Exception 类（5 个） | ⬜ | - | - |
-| 21 | API Key 认证 | ⬜ | - | - |
-| 22 | 速率限制 | ⬜ | - | - |
-| 23 | IngestGuard | ⬜ | - | - |
-| 24 | CORS + CSRF 配置 | ⬜ | - | - |
+| 13 | LLMProvider ABC | ✅ | 5 | `73085e7` |
+| 14 | LLMGatewayProvider | ⏳ HITL | - | - |
+| 15 | Retriever（Hybrid Search + RRF） | ✅ | 5 | `c1ff991` |
+| 16 | PromptBuilder | ✅ | 4 | `c1ff991` |
+| 17 | APIResponse 包装器 | ✅ | 5 | `c1ff991` |
+| 18 | RequestIDMiddleware | ✅ | 4 | `c1ff991` |
+| 19 | BaseZragException + Handler Registry | ✅ | 23 | `fecdef7` |
+| 20 | 具体 Exception 类（5 个） | ✅ | (含在 19) | `fecdef7` |
+| 21 | API Key 认证 | ✅ | 4 | `fecdef7` |
+| 22 | 速率限制 | ✅ | 3 | `fecdef7` |
+| 23 | IngestGuard | ✅ | 4 | `fecdef7` |
+| 24 | CORS + CSRF 配置 | ✅ | 3 | `fecdef7` |
 | 25 | POST /v1/documents/ingest + GET /v1/sources | ⬜ | - | - |
 | 26 | POST /v1/conversations | ⬜ | - | - |
 | 27 | POST /v1/conversations/{id}/messages | ⬜ | - | - |
