@@ -153,7 +153,7 @@
 | 5 | ChromaDB — Collection 管理 | ✅ | 6 | `ea9d435` |
 | 6 | EmbeddingModel ABC | ✅ | 3 | `f2dab87` |
 | 7 | BgeSmallEmbedder | ✅ | 4 | `71b03ff` |
-| 8 | DocumentSource ABC | ⬜ | - | - |
+| 8 | DocumentSource ABC | ✅ | 6 | `6fe032a` |
 | 9 | MacNotesSource | ⬜ | - | - |
 | 10 | ChunkingStrategy ABC | ⬜ | - | - |
 | 11 | 具体 ChunkingStrategy | ⬜ | - | - |
