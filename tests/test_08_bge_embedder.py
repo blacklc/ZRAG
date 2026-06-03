@@ -8,10 +8,19 @@ import pytest
 from zrag.embed.local import BgeSmallEmbedder
 
 
+CACHE_DIR = "/Users/lichen/Documents/workspace/models"
+
+
 @pytest.fixture(scope="module")
 def embedder() -> BgeSmallEmbedder:
     """返回 BgeSmallEmbedder 实例, 整个模块共享以复用模型加载"""
-    return BgeSmallEmbedder()
+    return BgeSmallEmbedder(cache_dir=CACHE_DIR)
+
+
+def test_missing_cache_dir_raises():
+    """未设置 cache_dir → 抛出 ValueError"""
+    with pytest.raises(ValueError, match="cache_dir 未设置"):
+        BgeSmallEmbedder()
 
 
 class TestBgeSmallEmbedder:

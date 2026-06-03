@@ -23,6 +23,11 @@ class BgeSmallEmbedder(EmbeddingModel):
     def __init__(
         self, model_name: str = "BAAI/bge-small-zh-v1.5", cache_dir: str | None = None
     ):
+        if cache_dir is None:
+            raise ValueError(
+                "cache_dir 未设置。请通过配置文件（config/embedding.yaml）指定模型存放目录，"
+                "例如: embedding.cache_dir = /Users/lichen/Documents/workspace/models"
+            )
         self._model = SentenceTransformer(model_name, cache_folder=cache_dir)
 
     def embed(self, texts: list[str]) -> list[list[float]]:
