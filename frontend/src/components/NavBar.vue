@@ -220,23 +220,35 @@
 </template>
 
 <script setup>
+/**
+ * NavBar 组件
+ *
+ * 顶部导航栏组件, 负责:
+ * - 渲染 Logo 与桌面端路由导航链接
+ * - 切换深色模式 (写入 localStorage, 同步 <html> class)
+ * - 触发 "新建会话" 事件, 由父组件 (App.vue) 实际处理
+ * - 移动端下拉菜单 (含点击外部关闭)
+ * - 可选的侧边栏切换按钮 (供 ChatView 在 <md 屏幕下使用)
+ */
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 
-// ======================
-// Emits 定义
-// ======================
+/** localStorage 中用于持久化暗黑模式偏好的 key */
+const DARK_MODE_STORAGE_KEY = 'darkMode'
+/** 用于定位"移动端下拉菜单"与触发按钮的 data-testid */
+const MOBILE_MENU_TESTID = 'mobile-menu'
+const MOBILE_MENU_BTN_TESTID = 'mobile-menu-btn'
+
 const emit = defineEmits([
   'new-conversation',
   'toggle-sidebar',
 ])
 
-// ======================
-// Props 定义
-// ======================
 /**
- * 是否显示"侧边栏切换"按钮(汉堡菜单).
- * - true:  显示 (一般 ChatView 用来在手机上弹出/隐藏 ChatSidebar)
- * - false: 隐藏 (例如 SourcesView 没用侧边栏)
+ * 组件 Props
+ *
+ * @typedef {Object} NavBarProps
+ * @property {boolean} [showSidebarToggle=false] - 是否显示"侧边栏切换"按钮 (汉堡菜单);
+ *   一般由 ChatView 传入 true, 在 <md 屏幕下用于弹出/隐藏 ChatSidebar
  */
 defineProps({
   showSidebarToggle: {
@@ -244,10 +256,6 @@ defineProps({
     default: false,
   },
 })
-
-// ======================
-// 响应式状态
-// ======================
 
 /**
  * 当前深色模式开关
@@ -259,15 +267,11 @@ const isDark = ref(false)
 /** 移动端下拉菜单开关 */
 const mobileMenuOpen = ref(false)
 
-// 路由导航链接配置
+/** 路由导航链接配置 */
 const links = [
   { to: '/', label: '对话', exact: true },
   { to: '/sources', label: '知识库', exact: false },
 ]
-
-// ======================
-// 生命周期
-// ======================
 
 /**
  * 组件挂载时同步当前深色模式状态
@@ -285,21 +289,19 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', onDocumentClick)
 })
 
-// ======================
-// 方法定义
-// ======================
-
 /**
  * 切换深色模式
  * 1. toggle document.documentElement 的 'dark' class
  * 2. 将最新状态写入 localStorage('darkMode')
  * 3. 同步更新当前组件的 isDark 引用以刷新图标
+ *
+ * @returns {void}
  */
 function toggleDarkMode() {
   const root = document.documentElement
   const next = !root.classList.contains('dark')
   root.classList.toggle('dark', next)
-  localStorage.setItem('darkMode', String(next))
+  localStorage.setItem(DARK_MODE_STORAGE_KEY, String(next))
   isDark.value = next
 }
 
@@ -307,6 +309,8 @@ function toggleDarkMode() {
  * 触发"新建会话"事件
  * 实际行为由父组件 (App.vue) 监听并实现,
  * NavBar 自身只负责发出意图, 保持组件职责单一.
+ *
+ * @returns {void}
  */
 function onNewConversation() {
   emit('new-conversation')
@@ -314,6 +318,8 @@ function onNewConversation() {
 
 /**
  * 切换移动端下拉菜单
+ *
+ * @returns {void}
  */
 function toggleMobileMenu() {
   mobileMenuOpen.value = !mobileMenuOpen.value
@@ -321,6 +327,8 @@ function toggleMobileMenu() {
 
 /**
  * 关闭移动端下拉菜单
+ *
+ * @returns {void}
  */
 function closeMobileMenu() {
   mobileMenuOpen.value = false
@@ -328,6 +336,8 @@ function closeMobileMenu() {
 
 /**
  * 移动端"新建对话"按钮: 先关闭菜单再 emit, 避免菜单未关闭导致 UI 闪烁.
+ *
+ * @returns {void}
  */
 function onMobileNewConversation() {
   closeMobileMenu()
@@ -335,17 +345,30 @@ function onMobileNewConversation() {
 }
 
 /**
+ * 判断事件源是否落在指定容器内
+ *
+ * @param {EventTarget|null} target - 事件源
+ * @param {Element|null} container - 容器元素
+ * @returns {boolean} 是否在容器内
+ */
+function isInside(target, container) {
+  if (!container) return false
+  return target instanceof Node && container.contains(target)
+}
+
+/**
  * 文档级点击事件: 点击菜单外部时关闭菜单
- * @param {MouseEvent} event
+ *
+ * @param {MouseEvent} event - 鼠标事件
+ * @returns {void}
  */
 function onDocumentClick(event) {
   if (!mobileMenuOpen.value) return
-  const root = event.target
-  const menu = document.querySelector('[data-testid="mobile-menu"]')
-  const btn = document.querySelector('[data-testid="mobile-menu-btn"]')
+  const menu = document.querySelector(`[data-testid="${MOBILE_MENU_TESTID}"]`)
+  const btn = document.querySelector(`[data-testid="${MOBILE_MENU_BTN_TESTID}"]`)
   // 菜单/按钮内的点击不处理
-  const inMenu = menu && root instanceof Node && menu.contains(root)
-  const inBtn = btn && root instanceof Node && btn.contains(root)
+  const inMenu = isInside(event.target, menu)
+  const inBtn = isInside(event.target, btn)
   if (!inMenu && !inBtn) {
     mobileMenuOpen.value = false
   }

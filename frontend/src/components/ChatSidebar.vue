@@ -242,69 +242,111 @@
  */
 import { ref } from 'vue'
 
-// ===== Props =====
+/** 会话列表默认占位标题 */
+const DEFAULT_CONVERSATION_TITLE = '新对话'
+
 /**
- * 会话列表数据，每项包含：
- *   id: string 会话唯一 ID
- *   title: string 会话标题
- *   created_at: string ISO 格式创建时间
- *   last_msg_at: string ISO 格式最后消息时间（可空）
+ * 组件 Props
+ *
+ * @typedef {Object} ConversationItem
+ * @property {string} id - 会话唯一 ID
+ * @property {string} [title] - 会话标题 (可空, 缺省时显示 "新对话")
+ * @property {string} created_at - ISO 格式创建时间
+ * @property {string} [last_msg_at] - ISO 格式最后消息时间 (可空)
+ *
+ * @typedef {Object} ChatSidebarProps
+ * @property {ConversationItem[]} [conversations=[]] - 会话列表
+ * @property {string|null} [activeId=null] - 当前激活的会话 ID
+ * @property {boolean} [loading=false] - 是否处于加载状态 (true 时显示骨架屏)
  */
 const props = defineProps({
   conversations: {
     type: Array,
     default: () => [],
   },
-  /** 当前激活的会话 ID（高亮匹配项） */
+  /** 当前激活的会话 ID (高亮匹配项) */
   activeId: {
     type: [String, null],
     default: null,
   },
-  /** 是否处于加载状态（true 时显示骨架屏） */
+  /** 是否处于加载状态 (true 时显示骨架屏) */
   loading: {
     type: Boolean,
     default: false,
   },
 })
 
-// ===== Emits =====
+/**
+ * 组件事件
+ *
+ * @typedef {Object} ChatSidebarEmits
+ * @property {() => void} new-conversation - 点击"新建对话"按钮
+ * @property {(id: string) => void} select-conversation - 选中某个会话
+ * @property {(id: string) => void} delete-conversation - 确认删除某个会话
+ */
 const emit = defineEmits([
   'new-conversation',
   'select-conversation',
   'delete-conversation',
 ])
 
-// ===== 内部状态 =====
+/** 侧边栏折叠状态 */
 const collapsed = ref(false)
-/** 待删除会话对象；非空时显示确认弹窗 */
+/** 待删除会话对象; 非空时显示确认弹窗 */
 const confirmDelete = ref(null)
 
-// ===== 方法 =====
-/** 切换侧边栏折叠状态 */
+/** 时间区间阈值 (秒), 用于相对时间格式化 */
+const RELATIVE_TIME_THRESHOLDS = Object.freeze({
+  MINUTE: 60,
+  HOUR: 3600,
+  DAY: 86400,
+  WEEK: 604800,
+})
+
+/**
+ * 切换侧边栏折叠状态
+ *
+ * @returns {void}
+ */
 const toggleCollapsed = () => {
   collapsed.value = !collapsed.value
 }
 
-/** 触发"新建对话"事件 */
+/**
+ * 触发"新建对话"事件
+ *
+ * @returns {void}
+ */
 const handleNewConversation = () => {
   emit('new-conversation')
 }
 
 /**
  * 判断指定会话是否为当前激活会话
- * @param {string} id 会话 ID
+ *
+ * @param {string} id - 会话 ID
  * @returns {boolean} 是否激活
  */
 const isActive = (id) => {
   return props.activeId !== null && props.activeId !== undefined && props.activeId === id
 }
 
-/** 触发"选择会话"事件 */
+/**
+ * 触发"选择会话"事件
+ *
+ * @param {string} id - 会话 ID
+ * @returns {void}
+ */
 const handleSelect = (id) => {
   emit('select-conversation', id)
 }
 
-/** 打开删除确认弹窗 */
+/**
+ * 打开删除确认弹窗
+ *
+ * @param {ConversationItem} conv - 会话对象
+ * @returns {void}
+ */
 const handleDeleteClick = (conv) => {
   confirmDelete.value = conv
 }
@@ -314,7 +356,7 @@ const cancelDelete = () => {
   confirmDelete.value = null
 }
 
-/** 确认删除，触发事件并关闭弹窗 */
+/** 确认删除, 触发事件并关闭弹窗 */
 const confirmDeleteAction = () => {
   if (confirmDelete.value) {
     emit('delete-conversation', confirmDelete.value.id)
@@ -323,28 +365,41 @@ const confirmDeleteAction = () => {
 }
 
 /**
+ * 将相对时间值格式化为人类可读字符串
+ *
+ * @param {number} diffSec - 与当前时间的差值 (秒)
+ * @param {Date} date - 原始 Date 对象
+ * @returns {string} 相对时间字符串
+ */
+function formatRelativeDiff(diffSec, date) {
+  const { MINUTE, HOUR, DAY, WEEK } = RELATIVE_TIME_THRESHOLDS
+  if (diffSec < MINUTE) return '刚刚'
+  if (diffSec < HOUR) return `${Math.floor(diffSec / MINUTE)} 分钟前`
+  if (diffSec < DAY) return `${Math.floor(diffSec / HOUR)} 小时前`
+  if (diffSec < WEEK) return `${Math.floor(diffSec / DAY)} 天前`
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+/**
  * 将 ISO 时间格式化为相对时间字符串
- * - 1 分钟内：刚刚
- * - 1 小时内：N 分钟前
- * - 24 小时内：N 小时前
- * - 7 天内：N 天前
- * - 超过 7 天：返回 yyyy-MM-dd 形式
- * @param {string} isoTime ISO 格式时间字符串
+ * - 1 分钟内: 刚刚
+ * - 1 小时内: N 分钟前
+ * - 24 小时内: N 小时前
+ * - 7 天内: N 天前
+ * - 超过 7 天: 返回 yyyy-MM-dd 形式
+ * - 空值或非法值: 返回空串
+ *
+ * @param {string} isoTime - ISO 格式时间字符串
  * @returns {string} 相对时间字符串
  */
 const formatRelativeTime = (isoTime) => {
   if (!isoTime) return ''
   const date = new Date(isoTime)
   if (Number.isNaN(date.getTime())) return ''
-  const now = Date.now()
-  const diffSec = Math.floor((now - date.getTime()) / 1000)
-  if (diffSec < 60) return '刚刚'
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分钟前`
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} 小时前`
-  if (diffSec < 604800) return `${Math.floor(diffSec / 86400)} 天前`
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
+  const diffSec = Math.floor((Date.now() - date.getTime()) / 1000)
+  return formatRelativeDiff(diffSec, date)
 }
 </script>
