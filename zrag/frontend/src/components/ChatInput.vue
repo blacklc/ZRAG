@@ -5,7 +5,7 @@
 -->
 <template>
   <div
-    class="sticky bottom-0 z-10 px-4 py-3
+    class="sticky bottom-0 z-10 px-2 sm:px-4 py-2 sm:py-3
            bg-white/80 dark:bg-gray-900/80 backdrop-blur-md
            border-t border-gray-200 dark:border-gray-800"
   >

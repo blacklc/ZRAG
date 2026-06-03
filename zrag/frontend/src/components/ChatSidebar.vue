@@ -1,6 +1,9 @@
 <template>
   <aside
-    class="flex flex-col h-full bg-gray-50 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 transition-all duration-200"
+    class="flex flex-col h-full bg-gray-50 dark:bg-gray-800
+           border-r border-gray-200 dark:border-gray-700
+           transition-all duration-200
+           md:w-64 md:shrink-0"
     :class="collapsed ? 'w-12' : 'w-64'"
   >
     <!-- 顶部区域：折叠按钮 + 新建对话 -->

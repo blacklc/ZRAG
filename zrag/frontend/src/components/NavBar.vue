@@ -2,10 +2,15 @@
   NavBar 组件
   顶部导航栏,提供 logo、路由导航、深色模式切换和新建会话入口.
   遵循 Apple 风格设计: 半透明 + 模糊背景 + 细分割线.
+  响应式:
+    - 移动端 (<md): 隐藏桌面导航链接, 显示汉堡按钮 (触发下拉菜单)
+    - 桌面端 (>=md): 始终显示导航链接, 隐藏汉堡按钮
+    - 新建会话按钮在小屏隐藏, 通过汉堡菜单中的 "新建对话" 入口触发
 -->
 <template>
   <nav
-    class="sticky top-0 z-50 h-14 flex items-center justify-between px-6
+    class="sticky top-0 z-50 h-14 flex items-center justify-between
+           px-3 sm:px-4 md:px-6
            bg-white/70 dark:bg-gray-900/70 backdrop-blur-md
            border-b border-gray-200 dark:border-gray-800
            text-gray-900 dark:text-gray-100"
@@ -14,14 +19,14 @@
     <router-link
       to="/"
       class="flex items-center gap-2 text-lg font-semibold
-             hover:opacity-80 transition-opacity"
+             hover:opacity-80 transition-opacity shrink-0"
     >
       <span class="text-xl">📚</span>
-      <span>ZRAG</span>
+      <span class="hidden sm:inline">ZRAG</span>
     </router-link>
 
-    <!-- 中间: 路由导航链接 -->
-    <div class="flex items-center gap-1">
+    <!-- 中间: 路由导航链接 (桌面端显示) -->
+    <div class="hidden md:flex items-center gap-1">
       <router-link
         v-for="link in links"
         :key="link.to"
@@ -39,8 +44,30 @@
     </div>
 
     <!-- 右侧: 功能按钮组 -->
-    <div class="flex items-center gap-2">
-      <!-- 深色模式切换按钮 -->
+    <div class="flex items-center gap-1 sm:gap-2">
+      <!-- 桌面端: 新建会话按钮 (始终显示) -->
+      <button
+        type="button"
+        @click="onNewConversation"
+        aria-label="新建会话"
+        class="hidden md:inline-flex p-2 rounded-md
+               text-gray-600 dark:text-gray-400
+               hover:bg-gray-100 dark:hover:bg-gray-800
+               hover:text-gray-900 dark:hover:text-gray-100
+               transition-colors"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="20" height="20" viewBox="0 0 24 24"
+          fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round"
+        >
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
+      </button>
+
+      <!-- 深色模式切换按钮 (始终显示) -->
       <button
         type="button"
         @click="toggleDarkMode"
@@ -81,16 +108,18 @@
         </svg>
       </button>
 
-      <!-- 新建会话按钮 -->
+      <!-- 侧边栏切换按钮 (移动端, 仅 ChatView 需要) -->
       <button
+        v-if="showSidebarToggle"
         type="button"
-        @click="onNewConversation"
-        aria-label="新建会话"
-        class="p-2 rounded-md
+        @click="emit('toggle-sidebar')"
+        aria-label="切换侧边栏"
+        class="md:hidden p-2 rounded-md
                text-gray-600 dark:text-gray-400
                hover:bg-gray-100 dark:hover:bg-gray-800
                hover:text-gray-900 dark:hover:text-gray-100
                transition-colors"
+        data-testid="hamburger-btn"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -98,21 +127,123 @@
           fill="none" stroke="currentColor" stroke-width="2"
           stroke-linecap="round" stroke-linejoin="round"
         >
-          <line x1="12" y1="5" x2="12" y2="19" />
-          <line x1="5" y1="12" x2="19" y2="12" />
+          <line x1="3" y1="6" x2="21" y2="6" />
+          <line x1="3" y1="12" x2="21" y2="12" />
+          <line x1="3" y1="18" x2="21" y2="18" />
+        </svg>
+      </button>
+
+      <!-- 移动端菜单按钮 (触发下拉) -->
+      <button
+        type="button"
+        @click="toggleMobileMenu"
+        aria-label="打开菜单"
+        :aria-expanded="mobileMenuOpen"
+        class="md:hidden p-2 rounded-md
+               text-gray-600 dark:text-gray-400
+               hover:bg-gray-100 dark:hover:bg-gray-800
+               hover:text-gray-900 dark:hover:text-gray-100
+               transition-colors"
+        data-testid="mobile-menu-btn"
+      >
+        <svg
+          v-if="!mobileMenuOpen"
+          xmlns="http://www.w3.org/2000/svg"
+          width="20" height="20" viewBox="0 0 24 24"
+          fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round"
+        >
+          <line x1="3" y1="6" x2="21" y2="6" />
+          <line x1="3" y1="12" x2="21" y2="12" />
+          <line x1="3" y1="18" x2="21" y2="18" />
+        </svg>
+        <svg
+          v-else
+          xmlns="http://www.w3.org/2000/svg"
+          width="20" height="20" viewBox="0 0 24 24"
+          fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round"
+        >
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
         </svg>
       </button>
     </div>
+
+    <!-- 移动端下拉菜单 -->
+    <transition
+      enter-active-class="transition ease-out duration-150"
+      enter-from-class="opacity-0 -translate-y-1"
+      enter-to-class="opacity-100 translate-y-0"
+      leave-active-class="transition ease-in duration-100"
+      leave-from-class="opacity-100 translate-y-0"
+      leave-to-class="opacity-0 -translate-y-1"
+    >
+      <div
+        v-if="mobileMenuOpen"
+        class="md:hidden absolute top-14 inset-x-0
+               bg-white dark:bg-gray-900
+               border-b border-gray-200 dark:border-gray-800
+               shadow-lg"
+        data-testid="mobile-menu"
+      >
+        <div class="px-2 py-2 space-y-1">
+          <router-link
+            v-for="link in links"
+            :key="link.to"
+            :to="link.to"
+            class="block px-3 py-2 rounded-md text-sm font-medium
+                   text-gray-700 dark:text-gray-200
+                   hover:bg-gray-100 dark:hover:bg-gray-800
+                   transition-colors"
+            active-class="bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+            :exact-active-class="link.exact ? 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100' : ''"
+            @click="closeMobileMenu"
+          >
+            {{ link.label }}
+          </router-link>
+          <button
+            type="button"
+            @click="onMobileNewConversation"
+            class="md:hidden w-full text-left px-3 py-2 rounded-md text-sm font-medium
+                   text-gray-700 dark:text-gray-200
+                   hover:bg-gray-100 dark:hover:bg-gray-800
+                   transition-colors"
+            data-testid="mobile-new-conversation-btn"
+          >
+            新建对话
+          </button>
+        </div>
+      </div>
+    </transition>
   </nav>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 
 // ======================
 // Emits 定义
 // ======================
-const emit = defineEmits(['new-conversation'])
+const emit = defineEmits([
+  'new-conversation',
+  'toggle-sidebar',
+])
+
+// ======================
+// Props 定义
+// ======================
+/**
+ * 是否显示"侧边栏切换"按钮(汉堡菜单).
+ * - true:  显示 (一般 ChatView 用来在手机上弹出/隐藏 ChatSidebar)
+ * - false: 隐藏 (例如 SourcesView 没用侧边栏)
+ */
+defineProps({
+  showSidebarToggle: {
+    type: Boolean,
+    default: false,
+  },
+})
 
 // ======================
 // 响应式状态
@@ -124,6 +255,9 @@ const emit = defineEmits(['new-conversation'])
  * 保持与 main.js 初始化逻辑一致.
  */
 const isDark = ref(false)
+
+/** 移动端下拉菜单开关 */
+const mobileMenuOpen = ref(false)
 
 // 路由导航链接配置
 const links = [
@@ -141,6 +275,14 @@ const links = [
  */
 onMounted(() => {
   isDark.value = document.documentElement.classList.contains('dark')
+  document.addEventListener('click', onDocumentClick)
+})
+
+/**
+ * 组件卸载时移除全局点击监听, 防止内存泄漏.
+ */
+onBeforeUnmount(() => {
+  document.removeEventListener('click', onDocumentClick)
 })
 
 // ======================
@@ -168,5 +310,44 @@ function toggleDarkMode() {
  */
 function onNewConversation() {
   emit('new-conversation')
+}
+
+/**
+ * 切换移动端下拉菜单
+ */
+function toggleMobileMenu() {
+  mobileMenuOpen.value = !mobileMenuOpen.value
+}
+
+/**
+ * 关闭移动端下拉菜单
+ */
+function closeMobileMenu() {
+  mobileMenuOpen.value = false
+}
+
+/**
+ * 移动端"新建对话"按钮: 先关闭菜单再 emit, 避免菜单未关闭导致 UI 闪烁.
+ */
+function onMobileNewConversation() {
+  closeMobileMenu()
+  emit('new-conversation')
+}
+
+/**
+ * 文档级点击事件: 点击菜单外部时关闭菜单
+ * @param {MouseEvent} event
+ */
+function onDocumentClick(event) {
+  if (!mobileMenuOpen.value) return
+  const root = event.target
+  const menu = document.querySelector('[data-testid="mobile-menu"]')
+  const btn = document.querySelector('[data-testid="mobile-menu-btn"]')
+  // 菜单/按钮内的点击不处理
+  const inMenu = menu && root instanceof Node && menu.contains(root)
+  const inBtn = btn && root instanceof Node && btn.contains(root)
+  if (!inMenu && !inBtn) {
+    mobileMenuOpen.value = false
+  }
 }
 </script>

@@ -16,20 +16,20 @@
     <NavBar />
 
     <!-- 主体内容区 -->
-    <main class="flex-1 max-w-7xl w-full mx-auto px-6 py-8">
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
       <!-- 顶部标题 + 操作按钮 -->
       <header class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-        <div>
-          <h1 class="text-2xl font-bold tracking-tight">知识库来源</h1>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+        <div class="min-w-0">
+          <h1 class="text-xl sm:text-2xl font-bold tracking-tight">知识库来源</h1>
+          <p class="mt-1 text-xs sm:text-sm text-gray-500 dark:text-gray-400">
             管理 RAG 系统的文档来源,执行增量或全量摄入
           </p>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
           <button
             type="button"
             :disabled="ingesting"
-            class="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium
+            class="inline-flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 text-sm font-medium
                    text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800
                    border border-gray-300 dark:border-gray-600
                    hover:bg-gray-50 dark:hover:bg-gray-700
@@ -47,7 +47,7 @@
           <button
             type="button"
             :disabled="ingesting"
-            class="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium
+            class="inline-flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 text-sm font-medium
                    text-white bg-blue-600 hover:bg-blue-700
                    rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500
                    disabled:opacity-50 disabled:cursor-not-allowed
@@ -77,7 +77,7 @@
       <!-- 加载状态: 骨架屏 -->
       <div
         v-if="loading"
-        class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
+        class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4"
         data-testid="sources-skeleton"
       >
         <div
@@ -120,13 +120,13 @@
       <!-- 来源卡片网格 -->
       <div
         v-else
-        class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
+        class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4"
         data-testid="sources-grid"
       >
         <article
           v-for="source in sources"
           :key="source.source_type"
-          class="p-5 rounded-lg border border-gray-200 dark:border-gray-700
+          class="p-4 sm:p-5 rounded-lg border border-gray-200 dark:border-gray-700
                  bg-white dark:bg-gray-800
                  hover:border-blue-400 dark:hover:border-blue-500
                  hover:shadow-sm transition-all"
