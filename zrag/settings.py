@@ -10,10 +10,29 @@ ALLOWED_HOSTS = ['localhost']
 INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'rest_framework',
+    'corsheaders',
     'zrag',
 ]
 
-MIDDLEWARE = []
+MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
+]
+
+CORS_ALLOW_ALL_ORIGINS = True   # Phase 1 开发阶段
+
+CSRF_COOKIE_SECURE = False
+CSRF_COOKIE_HTTPONLY = False
+CSRF_USE_SESSIONS = False
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [],
+    'DEFAULT_THROTTLE_CLASSES': [],
+    'DEFAULT_THROTTLE_RATES': {
+        'chat': '10/min',
+        'ingest': '3/min',
+    },
+    'EXCEPTION_HANDLER': 'zrag.api.exception_handler.api_exception_handler',
+}
 
 ROOT_URLCONF = 'zrag.urls'
 
