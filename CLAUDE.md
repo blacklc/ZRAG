@@ -71,6 +71,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 变更原有设计中的项目文件目录结构
 - 修改原有设计中的代码段
 
+## 容器镜像构建
+当需要设计和实现容器镜像时, 请尽可能的使用```多阶段构建```的方式来减小镜像的大小.
+
 ## 实现路径
 按 `docs/PLAN.md` 的 45 个切片顺序实现，不能跳过依赖的上游切片。每个 AFK 切片必须自带测试代码。测试连续 3 次不通过则自动升级为 HITL。
 

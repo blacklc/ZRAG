@@ -6,6 +6,8 @@
  */
 
 const API_KEY = import.meta.env.VITE_API_KEY || ''
+/** API 基础路径，生产环境通过 nginx 代理 */
+const BASE_PATH = import.meta.env.VITE_API_BASE || '/zrag'
 
 /**
  * API 调用错误
@@ -68,7 +70,7 @@ async function request(method, path, body) {
   const options = { method, headers }
   if (body !== undefined) options.body = JSON.stringify(body)
 
-  const response = await fetch(path, options)
+  const response = await fetch(`${BASE_PATH}${path}`, options)
   const data = await parseJsonResponse(response)
 
   if (!response.ok) {

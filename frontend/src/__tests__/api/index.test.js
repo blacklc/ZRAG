@@ -58,7 +58,7 @@ describe('apiGet', () => {
     const { apiGet } = await import('../../api/index.js')
     const result = await apiGet('/v1/conversations')
 
-    expect(mockFetch).toHaveBeenCalledWith('/v1/conversations', {
+    expect(mockFetch).toHaveBeenCalledWith('/zrag/v1/conversations', {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
     })
@@ -108,7 +108,7 @@ describe('apiPost', () => {
     const body = { query: 'hello' }
     const result = await apiPost('/v1/conversations', body)
 
-    expect(mockFetch).toHaveBeenCalledWith('/v1/conversations', {
+    expect(mockFetch).toHaveBeenCalledWith('/zrag/v1/conversations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -146,7 +146,7 @@ describe('apiDelete', () => {
     const { apiDelete } = await import('../../api/index.js')
     const result = await apiDelete('/v1/conversations/conv-1')
 
-    expect(mockFetch).toHaveBeenCalledWith('/v1/conversations/conv-1', {
+    expect(mockFetch).toHaveBeenCalledWith('/zrag/v1/conversations/conv-1', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
     })
@@ -171,7 +171,7 @@ describe('API Key 鉴权头', () => {
     const { apiGet } = await import('../../api/index.js')
     await apiGet('/v1/test')
 
-    expect(mockFetch).toHaveBeenCalledWith('/v1/test', {
+    expect(mockFetch).toHaveBeenCalledWith('/zrag/v1/test', {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',

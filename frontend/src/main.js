@@ -50,7 +50,7 @@ function initDarkMode() {
 initDarkMode()
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory('/zrag/'),
   routes: [
     { path: '/', component: ChatView },
     { path: '/sources', component: SourcesView },
