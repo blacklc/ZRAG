@@ -1,0 +1,41 @@
+# === ZRAG Backend Docker 镜像 ===
+# 基于 python:3.10-slim，使用多阶段构建以减小最终镜像体积。
+#
+# builder 阶段安装编译依赖（gcc、libc6-dev）并 pip install 所有 Python 依赖；
+# runtime 阶段只复制已安装的 site-packages 和项目代码，不保留编译工具。
+
+# ---- builder 阶段 ----
+FROM python:3.10-slim AS builder
+WORKDIR /app
+
+# 安装构建依赖（uwsgi 需要 gcc 编译）
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# 安装 Python 依赖
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# ---- runtime 阶段 ----
+FROM python:3.10-slim
+WORKDIR /app
+
+# 从 builder 阶段复制已安装的 Python 包
+COPY --from=builder /usr/local/lib/python3.10/site-packages/ /usr/local/lib/python3.10/site-packages/
+COPY --from=builder /usr/local/bin/ /usr/local/bin/
+
+# 创建运行时所需目录
+RUN mkdir -p /app/data /app/log
+
+# 复制应用代码与配置
+COPY config/ ./config/
+COPY zrag/ ./zrag/
+COPY manage.py .
+COPY uwsgi.ini .
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
+
+EXPOSE 5965
+
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["uwsgi", "--ini", "/app/uwsgi.ini"]

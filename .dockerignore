@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+venv/
+.venv/
+
+# Git
+.git/
+.gitignore
+
+# Data
+data/
+
+# Frontend
+node_modules/
+dist/
+frontend/
+
+# IDE
+.idea/
+.vscode/
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Django
+*.log
+staticfiles/
+
+# Claude
+.claude/
+
+# Docker
+Dockerfile*
+.dockerignore
+
+# Documentation
+docs/
+*.md
