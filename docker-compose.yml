@@ -59,7 +59,7 @@ services:
     expose:
       - "5965"
     volumes:
-      - ./data:/app/data
+      - ./data/pro:/app/data
       - ./models:/app/models:ro
       - ./logs:/app/log
     environment:
