@@ -178,11 +178,11 @@
 | 30 | DELETE /v1/conversations/{id} | ✅ | (含在 28) | `852432a` |
 | 31 | GET /v1/health/live | ✅ | 4 | `852432a` |
 | 32 | GET /v1/health/ready | ✅ | (含在 31) | `852432a` |
-| 33 | Vue 项目初始化 | ✅ | - | `b5f1494` |
-| 34 | NavBar 组件 | ✅ | - | `d2419fe` |
-| 35 | ChatInput 组件 | ✅ | - | `bfba551` |
-| 36 | ChatMessage 组件 | ✅ | - | `577f5c2` |
-| 37 | ChatSidebar 组件 | ✅ | - | `3ea0395` |
+| 33 | Vue 项目初始化 + 测试基础设施 | ✅ | 76 | `b5f1494` |
+| 34 | NavBar 组件 | ✅ | (含在 33) | `d2419fe` |
+| 35 | ChatInput 组件 | ✅ | (含在 33) | `bfba551` |
+| 36 | ChatMessage 组件 | ✅ | (含在 33) | `577f5c2` |
+| 37 | ChatSidebar 组件 | ✅ | (含在 33) | `3ea0395` |
 | 38 | ChatView 页面 | ✅ | - | `97fb2b0` |
 | 39 | SourcesView 页面 | ✅ | - | `ccb023e` |
 | 40 | 404 页面 + 全局错误处理 | ✅ | - | `59817a7` |

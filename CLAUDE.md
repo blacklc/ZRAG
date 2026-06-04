@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## subagent的使用时机
 ```在以下这些场景中, 请使用subagent来完成```:
 1. 在绘制图片时
-2. 在安装一些组件或服务时
+2. 在安装一些组件、服务或基础设施时
 3. 在执行网络搜索的操作时
 4. ```在执行代码测试工作时```
 5. 在绘制图片时

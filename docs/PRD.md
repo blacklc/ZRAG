@@ -212,7 +212,7 @@ CREATE TABLE messages (id TEXT PK, conversation_id TEXT FK, role TEXT, content T
 - pytest：全部 Python 测试
 - pytest-httpx 或 responses：mock HTTP（LLM Gateway）
 - Django test client：API 集成测试
-- Vitest：Vue 组件测试（可选，可延后）
+- Vitest + @vue/test-utils + happy-dom：Vue 组件测试 + 纯逻辑测试
 
 ## 不在范围内
 
