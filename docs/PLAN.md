@@ -189,8 +189,8 @@
 | 41 | 响应式布局 | ✅ | - | `6581c3f` |
 | — | YAML 配置系统 + 模块集成 | ✅ | 28 | `acc0e23` |
 | 42 | Dockerfile.backend + uwsgi.ini + entrypoint.sh | ✅ | - | `3674def` |
-| 43 | Dockerfile.frontend | ⬜ | - | - |
-| 44 | nginx.conf | ⬜ | - | - |
-| 45 | docker-compose.yml + .env 模板 + .dockerignore | ⬜ | - | - |
+| 43 | Dockerfile.frontend | ✅ | - | `a98ea3d` |
+| 44 | nginx.conf | ✅ | - | `871441d` |
+| 45 | docker-compose.yml + .env 模板 + .dockerignore | ✅ | - | `11b1f83` |
 
 - ✅ 已完成 · 🔄 进行中 · ⬜ 待开始 · ⚠ HITL 升级
