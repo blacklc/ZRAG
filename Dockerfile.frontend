@@ -1,0 +1,38 @@
+# =============================================================================
+# Dockerfile.frontend — ZRAG 前端镜像构建
+#
+# 多阶段构建:
+#   1. builder — 基于 node:22-alpine 构建前端静态资源
+#   2. runtime — 基于 nginx:alpine 仅包含 dist 产物
+#
+# VITE_API_KEY 作为构建参数注入, 用于前端与后端 API 的认证。
+# 该镜像不包含 nginx.conf, 由切片 44 的 nginx 容器统一管理配置。
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 1: builder — 编译前端代码
+# -----------------------------------------------------------------------------
+FROM node:22-alpine AS builder
+WORKDIR /src
+
+# 先只复制依赖文件, 利用 Docker 缓存层避免每次重新安装依赖
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+# 再复制全部源码 (可被 .dockerignore 排除 node_modules)
+COPY frontend/ ./
+
+# 构建参数 — API Key 在构建时注入
+ARG VITE_API_KEY
+ENV VITE_API_KEY=$VITE_API_KEY
+
+RUN npm run build
+
+# -----------------------------------------------------------------------------
+# Stage 2: runtime — nginx 运行环境
+# -----------------------------------------------------------------------------
+FROM nginx:alpine
+COPY --from=builder /src/dist/ /usr/share/nginx/html/
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
