@@ -1,0 +1,3 @@
+# 检索配置
+retrieval:
+  top_k: 10

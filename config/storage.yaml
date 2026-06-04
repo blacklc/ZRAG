@@ -1,0 +1,6 @@
+# 存储配置
+# 路径为相对路径，相对于 Django manage.py 所在目录（即项目根）
+# 容器部署时映射到 /app/data/ 持久化 volume
+storage:
+  sqlite_path: "data/zrag.db"
+  chroma_path: "data/chroma_db"

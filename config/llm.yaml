@@ -1,0 +1,9 @@
+# LLM 配置
+# gateway 配置用于连接 LiteLLM Gateway
+llm:
+  provider: "gateway"
+  timeout: 200
+  gateway:
+    base_url: "${LLM_GATEWAY_URL:-http://localhost:4000/v1}"
+    api_key: "${LITELLM_MASTER_KEY}"
+    model: "smart-router"

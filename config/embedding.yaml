@@ -1,0 +1,7 @@
+# Embedding 模型配置
+# 使用 BAAI/bge-small-zh-v1.5，输出 512 维向量
+# cache_dir 在容器部署时默认为 /app/models（只读 volume 挂载点）
+embedding:
+  model_name: "BAAI/bge-small-zh-v1.5"
+  cache_dir: "${MODELS_DIR:-/app/models}"
+  device: "cpu"

@@ -50,16 +50,19 @@ def _resolve_env_vars(config: dict) -> None:
     import os as _os
     import re as _re
 
-    pattern = _re.compile(r'\$\{(\w+)\}')
+    pattern = _re.compile(r'\$\{(\w+)(?::-([^}]*))?\}')
 
     def _resolve(value):
         if isinstance(value, str):
             def _replace(m):
                 var_name = m.group(1)
+                default_val = m.group(2)
                 env_val = _os.environ.get(var_name)
-                if env_val is None:
-                    raise ValueError(f"环境变量 {var_name} 未定义")
-                return env_val
+                if env_val is not None:
+                    return env_val
+                if default_val is not None:
+                    return default_val
+                raise ValueError(f"环境变量 {var_name} 未定义且无默认值")
             return pattern.sub(_replace, value)
         if isinstance(value, dict):
             return {k: _resolve(v) for k, v in value.items()}

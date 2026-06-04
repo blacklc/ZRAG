@@ -1,0 +1,4 @@
+# API 配置
+api:
+  key: "${ZRAG_API_KEY}"
+  query_max_length: 2000
