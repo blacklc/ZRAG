@@ -5,17 +5,16 @@
 ## 架构
 
 ```
-         ┌──────────────────────────────────┐
-         │         Nginx :80                │
-         │    容器内 :80, 宿主机 :80        │
-         │    URL: http://host/zrag/        │
-         └──────┬───────────────┬───────────┘
-                ▼               ▼
-         ┌──────────┐    ┌─────────────┐
-         │ Frontend │    │  Backend    │
-         │ :80      │    │  :5965      │
-         │ Vue 3    │    │ Django+WSGI │
-         └──────────┘    └──────┬──────┘
+  ┌──────────┐          docker compose
+  │  Nginx   │         ┌─────────────────┐
+  │ (独立部署)│──/zrag─▶│ frontend :80    │
+  │  :80     │         │ Vue 3          │
+  │          │──/zrag/ ├─────────────────┤
+  │          │  v1/───▶│ backend :5965   │
+  └──────────┘         │ Django + uWSGI │
+   其它项目用           │ SQLite+ChromaDB│
+   /other/ 等路径分     └────────────────┘
+```
                                    │
                      ┌─────────────┼─────────────┐
                      ▼             ▼              ▼
@@ -201,11 +200,21 @@ docker compose restart
 
 无需重建镜像。如需变更 YAML 默认值（如 `batch_size`、`top_k`），则在 `.env` 中增加对应环境变量即可。
 
-### 容器架构
+### Nginx 反向代理（独立部署）
+
+nginx 为多项目共享网关，**不**包含在 `docker compose up` 的启动序列中。
+
+将 `nginx.conf` 中的 `server` 块复制到 Nginx 配置目录（如 `/etc/nginx/conf.d/zrag.conf`），然后 `nginx -s reload`：
+
+```bash
+sudo cp nginx.conf /etc/nginx/conf.d/zrag.conf
+sudo nginx -s reload
+```
+
+### 容器服务
 
 | 容器 | 镜像 | 内部端口 | 说明 |
 |------|------|:--------:|------|
-| `nginx` | `nginx:alpine` | 80（容器内同宿主机） | 反向代理 `/zrag/` → frontend:80, `/zrag/v1/` → backend:5965 |
 | `frontend` | 自定义 `Dockerfile.frontend` | 80 | Vue 静态文件 |
 | `backend` | 自定义 `Dockerfile.backend` | 5965 | Django + uWSGI |
 
