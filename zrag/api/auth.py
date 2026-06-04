@@ -45,18 +45,20 @@ class APIKeyAuthentication(BaseAuthentication):
     def _validate_key(self, api_key: str) -> bool:
         """校验 API Key 是否匹配
 
-        优先从 settings.ZRAG_API_KEY 读取预期值,
-        若未配置则从环境变量 ZRAG_API_KEY 读取。
-        若均未配置则默认值为空字符串, 此时任何 Key 均不会匹配。
+        优先级顺序：settings.ZRAG_API_KEY（来自 config/api.yaml） > 环境变量 ZRAG_API_KEY。
+        当所有来源均未提供有效的 API Key 时抛出 ValueError。
 
         @param api_key: 待校验的 API Key
         @type  api_key: str
 
         @return: True 表示 Key 匹配, False 表示不匹配
         @rtype:  bool
+
+        @raises ValueError: 所有来源均未配置 API Key 时抛出
         """
-        expected = (
-            getattr(settings, "ZRAG_API_KEY", None)
-            or os.environ.get("ZRAG_API_KEY", "")
-        )
+        expected = getattr(settings, "ZRAG_API_KEY", None)
+        if not expected:
+            expected = os.environ.get("ZRAG_API_KEY", "")
+        if not expected:
+            raise ValueError("配置缺失: api.key, 请检查 config/api.yaml 或设置 ZRAG_API_KEY 环境变量")
         return api_key == expected

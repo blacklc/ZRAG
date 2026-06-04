@@ -21,17 +21,31 @@ class ChromaStore:
     @type  persist_dir: str
     """
 
-    def __init__(self, persist_dir: str):
+    def __init__(self, persist_dir: str | None = None):
         """构造方法
 
         仅创建 PersistentClient, 不自动创建 collection。
         Collection 的初始化延迟至首次调用公共方法或显式调用 init_collection()。
 
-        @param persist_dir: ChromaDB 持久化数据的存储目录
-        @type  persist_dir: str
+        若 persist_dir 未显式传入，则从 Django settings.ZRAG_STORAGE 配置中读取。
+        配置中也缺失时抛出 ValueError。
+
+        @param persist_dir: ChromaDB 持久化数据的存储目录, defaults to None
+                            未传入则从配置 storage.chroma_path 读取
+        @type  persist_dir: str, optional
+
+        @raises ValueError: persist_dir 在参数和配置中均未提供时抛出
         """
+        if persist_dir is not None:
+            self._persist_dir = persist_dir
+        else:
+            from django.conf import settings
+            storage_cfg = getattr(settings, "ZRAG_STORAGE", {})
+            self._persist_dir = storage_cfg.get("chroma_path")
+            if not self._persist_dir:
+                raise ValueError("配置缺失: storage.chroma_path, 请检查 config/storage.yaml")
         self._client = chromadb.PersistentClient(
-            path=persist_dir,
+            path=self._persist_dir,
             settings=ChromaSettings(anonymized_telemetry=False),
         )
         self._collection = None

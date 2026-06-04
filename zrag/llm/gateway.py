@@ -31,30 +31,49 @@ class LLMGatewayProvider(LLMProvider):
 
     def __init__(
         self,
-        model: str = "smart-router",
-        timeout: float = 200,
+        model: str | None = None,
+        timeout: float | None = None,
         base_url: str | None = None,
         on_error: Callable | None = None,
     ):
         """构造 LLMGatewayProvider
 
-        @param model: 模型名称, defaults to "smart-router"
+        若 model、timeout 或 base_url 未显式传入，则从 Django settings.ZRAG_LLM 配置中读取。
+        配置中也缺失时抛出 ValueError。
+
+        @param model: 模型名称, 未传入则从配置读取, defaults to None
         @type  model: str, optional
-        @param timeout: 请求超时秒数, defaults to 200
+        @param timeout: 请求超时秒数, 未传入则从配置读取, defaults to None
         @type  timeout: float, optional
-        @param base_url: LiteLLM Gateway 地址, defaults to "http://localhost:4000/v1"
+        @param base_url: LiteLLM Gateway 地址, 未传入则从配置读取, defaults to None
         @type  base_url: str, optional
         @param on_error: 错误回调函数, 接收 ErrorEvent
         @type  on_error: callable, optional
+
+        @raises ValueError: 必要配置项在参数和配置中均未提供时抛出
         """
-        super().__init__(model=model, timeout=timeout, on_error=on_error)
-        gateway_url = base_url or os.environ.get(
-            "LLM_GATEWAY_URL", "http://localhost:4000/v1"
-        )
-        self.client = OpenAI(
-            base_url=gateway_url,
-            api_key=os.environ.get("LITELLM_MASTER_KEY", "sk-dummy"),
-        )
+        from django.conf import settings
+        llm_cfg = getattr(settings, "ZRAG_LLM", {})
+        gateway_cfg = llm_cfg.get("gateway", {})
+
+        self._model = model if model is not None else gateway_cfg.get("model")
+        if not self._model:
+            raise ValueError("配置缺失: llm.gateway.model, 请检查 config/llm.yaml")
+
+        self._timeout = timeout if timeout is not None else llm_cfg.get("timeout")
+        if self._timeout is None:
+            raise ValueError("配置缺失: llm.timeout, 请检查 config/llm.yaml")
+
+        base_url_val = base_url if base_url is not None else gateway_cfg.get("base_url")
+        if not base_url_val:
+            raise ValueError("配置缺失: llm.gateway.base_url, 请检查 config/llm.yaml")
+
+        api_key_val = gateway_cfg.get("api_key")
+        if not api_key_val:
+            raise ValueError("配置缺失: llm.gateway.api_key, 请检查 config/llm.yaml 或设置 LITELLM_MASTER_KEY")
+
+        super().__init__(model=self._model, timeout=self._timeout, on_error=on_error)
+        self.client = OpenAI(base_url=base_url_val, api_key=api_key_val)
 
     def chat(self, messages: list[dict], timeout: float | None = None) -> str | None:
         """同步非流式对话

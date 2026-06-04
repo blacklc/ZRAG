@@ -114,10 +114,13 @@ class IngestionPipeline:
         chroma_store: ChromaStore,
         embedder: EmbeddingModel,
         chunker: ChunkingStrategy,
-        batch_size: int = 5,
+        batch_size: int | None = None,
         on_error: Callable | None = None,
     ):
         """构造方法
+
+        若 batch_size 未显式传入，则从 Django settings.ZRAG_INGEST 配置中读取。
+        配置中也未提供时默认使用 5。
 
         @param sqlite_store: SQLite 持久化存储
         @type  sqlite_store: SQLiteStore
@@ -127,7 +130,8 @@ class IngestionPipeline:
         @type  embedder: EmbeddingModel
         @param chunker: 文档分块策略
         @type  chunker: ChunkingStrategy
-        @param batch_size: 从 Source 获取文档时的批次大小, defaults to 5
+        @param batch_size: 从 Source 获取文档时的批次大小, defaults to None
+                           未传入则从配置 ingest.batch_size 读取
         @type  batch_size: int, optional
         @param on_error: 文档处理失败时的回调函数, 接收 ErrorEvent 参数;
                          若未提供, 则仅记录日志并继续处理下一篇文档
@@ -137,7 +141,12 @@ class IngestionPipeline:
         self.chroma_store = chroma_store
         self.embedder = embedder
         self.chunker = chunker
-        self.batch_size = batch_size
+        if batch_size is not None:
+            self.batch_size = batch_size
+        else:
+            from django.conf import settings
+            ingest_cfg = getattr(settings, "ZRAG_INGEST", {})
+            self.batch_size = ingest_cfg.get("batch_size", 5)
         self._on_error = on_error
 
     def run(

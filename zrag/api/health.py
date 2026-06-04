@@ -66,22 +66,30 @@ class HealthViewSet(viewsets.ViewSet):
 def get_sqlite_store():
     """获取 SQLiteStore 实例
 
-    使用默认路径 data/zrag.db 创建 SQLiteStore 对象实例并返回。
+    从 Django settings.ZRAG_STORAGE 配置中读取 sqlite_path 创建 SQLiteStore 对象实例。
+    配置中未提供时默认使用 "data/zrag.db"。
 
     @return: SQLiteStore 对象实例
     @rtype:  zrag.store.sqlite_store.SQLiteStore
     """
+    from django.conf import settings
+    storage_cfg = getattr(settings, "ZRAG_STORAGE", {})
+    db_path = storage_cfg.get("sqlite_path", "data/zrag.db")
     from zrag.store.sqlite_store import SQLiteStore
-    return SQLiteStore()
+    return SQLiteStore(db_path)
 
 
 def get_chroma_store():
     """获取 ChromaStore 实例
 
-    使用默认路径 data/chroma_db 创建 ChromaStore 对象实例并返回。
+    从 Django settings.ZRAG_STORAGE 配置中读取 chroma_path 创建 ChromaStore 对象实例。
+    配置中未提供时默认使用 "data/chroma_db"。
 
     @return: ChromaStore 对象实例
     @rtype:  zrag.store.vector_store.ChromaStore
     """
+    from django.conf import settings
+    storage_cfg = getattr(settings, "ZRAG_STORAGE", {})
+    chroma_path = storage_cfg.get("chroma_path", "data/chroma_db")
     from zrag.store.vector_store import ChromaStore
-    return ChromaStore(persist_dir='data/chroma_db')
+    return ChromaStore(persist_dir=chroma_path)
