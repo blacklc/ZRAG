@@ -15,14 +15,27 @@ class SQLiteStore:
     调用者无需直接管理连接生命周期, 但在使用完毕后建议调用 close() 方法释放资源。
     """
 
-    def __init__(self, db_path: str = 'data/zrag.db'):
+    def __init__(self, db_path: str | None = None):
         """构造方法
 
-        @param db_path: SQLite 数据库文件路径, defaults to 'data/zrag.db'
+        若 db_path 未显式传入，则从 Django settings.ZRAG_STORAGE 配置中读取。
+        配置中也缺失时抛出 ValueError。
+
+        @param db_path: SQLite 数据库文件路径, defaults to None
                         若传入 ':memory:' 则创建内存数据库, 主要用于测试场景
+                        未传入则从配置 storage.sqlite_path 读取
         @type  db_path: str, optional
+
+        @raises ValueError: db_path 在参数和配置中均未提供时抛出
         """
-        self._db_path = db_path
+        if db_path is not None:
+            self._db_path = db_path
+        else:
+            from django.conf import settings
+            storage_cfg = getattr(settings, "ZRAG_STORAGE", {})
+            self._db_path = storage_cfg.get("sqlite_path")
+            if not self._db_path:
+                raise ValueError("配置缺失: storage.sqlite_path, 请检查 config/storage.yaml")
         self._conn: sqlite3.Connection | None = None
 
     def _get_conn(self) -> sqlite3.Connection:
@@ -286,14 +299,15 @@ class SQLiteStore:
 # === 模块级单例 ===
 _sqlite_store: 'SQLiteStore | None' = None
 
-def get_sqlite_store(db_path: str = 'data/zrag.db') -> SQLiteStore:
+def get_sqlite_store(db_path: str | None = None) -> SQLiteStore:
     """获取 SQLiteStore 单例实例
 
     使用模块级全局变量缓存 SQLiteStore 实例, 确保整个应用生命周期内只创建一个实例。
-    若首次调用时实例尚未创建, 则根据传入的 db_path 创建新实例。
+    若首次调用时实例尚未创建, 则根据传入的 db_path 或配置路径创建新实例。
     后续调用会忽略 db_path 参数, 直接返回已缓存的实例。
 
-    @param db_path: 数据库文件路径, 仅在首次创建实例时生效, defaults to 'data/zrag.db'
+    @param db_path: 数据库文件路径, 仅在首次创建实例时生效, defaults to None
+                    未传入则从配置 storage.sqlite_path 读取
     @type  db_path: str, optional
 
     @return: SQLiteStore 单例实例
@@ -301,5 +315,9 @@ def get_sqlite_store(db_path: str = 'data/zrag.db') -> SQLiteStore:
     """
     global _sqlite_store
     if _sqlite_store is None:
+        if db_path is None:
+            from django.conf import settings
+            storage_cfg = getattr(settings, "ZRAG_STORAGE", {})
+            db_path = storage_cfg.get("sqlite_path") or "data/zrag.db"
         _sqlite_store = SQLiteStore(db_path)
     return _sqlite_store

@@ -28,20 +28,31 @@ class LLMProvider(ABC):
     def __init__(
         self,
         model: str | None = None,
-        timeout: float = 200,
+        timeout: float | None = None,
         on_error: Callable | None = None,
     ):
         """构造 LLMProvider
 
-        @param model: 模型名称, defaults to None
+        若 model 或 timeout 未显式传入，则从 Django settings.ZRAG_LLM 配置中读取。
+        配置中也缺失时抛出 ValueError。
+
+        @param model: 模型名称, 未传入则从配置读取, defaults to None
         @type  model: str, optional
-        @param timeout: 请求超时时间(秒), defaults to 200
+        @param timeout: 请求超时时间(秒), 未传入则从配置读取, defaults to None
         @type  timeout: float, optional
         @param on_error: 错误回调函数, 接收 ErrorEvent, defaults to None
         @type  on_error: callable, optional
+
+        @raises ValueError: model 或 timeout 在参数和配置中均未提供时抛出
         """
-        self._model = model
-        self._timeout = timeout
+        from django.conf import settings
+        llm_cfg = getattr(settings, "ZRAG_LLM", {})
+        self._model = model if model is not None else llm_cfg.get("gateway", {}).get("model")
+        if not self._model:
+            raise ValueError("配置缺失: llm.gateway.model")
+        self._timeout = timeout if timeout is not None else llm_cfg.get("timeout")
+        if self._timeout is None:
+            raise ValueError("配置缺失: llm.timeout")
         self._on_error = on_error
 
     @property

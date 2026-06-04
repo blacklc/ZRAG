@@ -21,14 +21,35 @@ class BgeSmallEmbedder(EmbeddingModel):
     """
 
     def __init__(
-        self, model_name: str = "BAAI/bge-small-zh-v1.5", cache_dir: str | None = None
+        self, model_name: str | None = None, cache_dir: str | None = None
     ):
-        if cache_dir is None:
-            raise ValueError(
-                "cache_dir 未设置。请通过配置文件（config/embedding.yaml）指定模型存放目录，"
-                "例如: embedding.cache_dir = /Users/lichen/Documents/workspace/models"
-            )
-        self._model = SentenceTransformer(model_name, cache_folder=cache_dir)
+        """构造 BgeSmallEmbedder
+
+        若 model_name 或 cache_dir 未显式传入，则从 Django settings.ZRAG_EMBEDDING 配置中读取。
+        配置中也缺失时抛出 ValueError。
+
+        @param model_name: HuggingFace 模型名称, defaults to None
+                            未传入则从配置读取
+        @type  model_name: str, optional
+        @param cache_dir: 模型缓存目录, defaults to None
+                          未传入则从配置读取
+        @type  cache_dir: str, optional
+
+        @raises ValueError: model_name 或 cache_dir 在参数和配置中均未提供时抛出
+        """
+        if model_name is not None and cache_dir is not None:
+            m_name, c_dir = model_name, cache_dir
+        else:
+            from django.conf import settings
+            emb_cfg = getattr(settings, "ZRAG_EMBEDDING", {})
+            m_name = model_name or emb_cfg.get("model_name")
+            c_dir = cache_dir or emb_cfg.get("cache_dir")
+            if not m_name or not c_dir:
+                raise ValueError(
+                    "配置缺失: embedding.model_name 或 embedding.cache_dir, "
+                    "请检查 config/embedding.yaml 或设置 MODELS_DIR 环境变量"
+                )
+        self._model = SentenceTransformer(m_name, cache_folder=c_dir)
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         """将批量文本转换为 512 维向量
