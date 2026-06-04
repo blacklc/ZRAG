@@ -31,6 +31,7 @@ def load_config(config_dir: str = "config") -> dict:
             else:
                 config[key] = value
     _resolve_env_vars(config)
+    _override_from_env(config)
     return config
 
 
@@ -70,6 +71,58 @@ def _resolve_env_vars(config: dict) -> None:
 
     for key in list(config.keys()):
         config[key] = _resolve(config[key])
+
+
+def _override_from_env(config: dict, prefix: str = "") -> None:
+    """使用环境变量覆盖配置项
+
+    递归遍历配置字典的全部叶子节点，检查是否存在同名 UPPER_SNAKE 环境变量。
+    若存在，则用环境变量的值覆盖配置项，并根据 YAML 原值类型做类型转换。
+
+    扁平化规则: llm.timeout → LLM_TIMEOUT, llm.gateway.base_url → LLM_GATEWAY_BASE_URL
+    类型转换规则:
+      - YAML 原值是 int → 环境变量值 int(var)，转换失败抛 ValueError
+      - YAML 原值是 float → 环境变量值 float(var)
+      - YAML 原值是 bool → 环境变量值 var.lower() in ('true', '1', 'yes')
+      - YAML 原值是 str → 直接使用环境变量值
+      - YAML 原值是 None → 直接使用环境变量值
+
+    环境变量覆盖发生在 ${VAR:-default} 替换之后，
+    因此 env override 可以覆盖 `${VAR:-default}` 解析后的结果。
+
+    @param config: 已完成 ${VAR} 替换的配置字典。该字典会被原地修改。
+    @type  config: dict
+    @param prefix: 当前递归层级的前缀，内部使用
+    @type  prefix: str
+    """
+    import os as _os
+
+    for key, value in list(config.items()):
+        env_key = f"{prefix}{key.upper()}" if not prefix else f"{prefix}_{key.upper()}"
+        if isinstance(value, dict):
+            _override_from_env(value, prefix=env_key)
+            continue
+        env_val = _os.environ.get(env_key)
+        if env_val is None:
+            continue
+        if isinstance(value, bool):
+            config[key] = env_val.lower() in ("true", "1", "yes")
+        elif isinstance(value, int):
+            try:
+                config[key] = int(env_val)
+            except ValueError:
+                raise ValueError(
+                    f"环境变量 {env_key} 的值 '{env_val}' 无法转换为 int"
+                )
+        elif isinstance(value, float):
+            try:
+                config[key] = float(env_val)
+            except ValueError:
+                raise ValueError(
+                    f"环境变量 {env_key} 的值 '{env_val}' 无法转换为 float"
+                )
+        else:
+            config[key] = env_val
 
 
 try:

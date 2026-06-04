@@ -114,3 +114,79 @@ class TestEnvVarSubstitution:
         _write_yaml(tmp_path, "k.yaml", 'key: "${UNDEF_VAR}"')
         with pytest.raises(ValueError, match="UNDEF_VAR"):
             load_config(str(tmp_path))
+
+
+class TestEnvOverride:
+    """测试 5: 环境变量直接覆盖配置值"""
+
+    def test_override_string(self, tmp_path):
+        """字符串值被 LLM_GATEWAY_BASE_URL 覆盖"""
+        os.environ["LLM_GATEWAY_BASE_URL"] = "http://docker:4000"
+        _write_yaml(tmp_path, "t.yaml",
+                     'llm:\n  gateway:\n    base_url: "http://localhost:4000"')
+        from zrag.config.loader import load_config
+        cfg = load_config(str(tmp_path))
+        assert cfg["llm"]["gateway"]["base_url"] == "http://docker:4000"
+        del os.environ["LLM_GATEWAY_BASE_URL"]
+
+    def test_override_int(self, tmp_path):
+        """整数值被 LLM_TIMEOUT 覆盖"""
+        os.environ["LLM_TIMEOUT"] = "999"
+        _write_yaml(tmp_path, "t.yaml", 'llm:\n  timeout: 200')
+        from zrag.config.loader import load_config
+        cfg = load_config(str(tmp_path))
+        assert cfg["llm"]["timeout"] == 999
+        assert isinstance(cfg["llm"]["timeout"], int)
+        del os.environ["LLM_TIMEOUT"]
+
+    def test_override_float(self, tmp_path):
+        """浮点值被 COST_RATE 覆盖"""
+        os.environ["COST_RATE"] = "1.5"
+        _write_yaml(tmp_path, "t.yaml", 'cost:\n  rate: 0.5')
+        from zrag.config.loader import load_config
+        cfg = load_config(str(tmp_path))
+        assert cfg["cost"]["rate"] == 1.5
+        assert isinstance(cfg["cost"]["rate"], float)
+        del os.environ["COST_RATE"]
+
+    def test_override_bool_true(self, tmp_path):
+        """bool 值被 DEBUG 覆盖 (true/1/yes 均视为 True)"""
+        os.environ["DEBUG"] = "true"
+        _write_yaml(tmp_path, "t.yaml", 'debug: False')
+        from zrag.config.loader import load_config
+        cfg = load_config(str(tmp_path))
+        assert cfg["debug"] is True
+        del os.environ["DEBUG"]
+
+    def test_override_nonexistent(self, tmp_path):
+        """不存在对应 env var 时保持 YAML 原值"""
+        env_key = "NONEXISTENT_CFG_KEY"
+        if env_key in os.environ:
+            del os.environ[env_key]
+        _write_yaml(tmp_path, "t.yaml", 'app:\n  name: "zrag"')
+        from zrag.config.loader import load_config
+        cfg = load_config(str(tmp_path))
+        assert cfg["app"]["name"] == "zrag"
+
+    def test_override_after_var_substitution(self, tmp_path):
+        """env override 在 ${VAR} 解析后执行，可覆盖占位符结果"""
+        os.environ["MY_DB"] = "yaml_val"
+        os.environ["STORAGE_SQLITE_PATH"] = "env_override_val"
+        _write_yaml(tmp_path, "t.yaml",
+                     'storage:\n  sqlite_path: "${MY_DB}"')
+        from zrag.config.loader import load_config
+        cfg = load_config(str(tmp_path))
+        # ${MY_DB} 先解析为 yaml_val，然后 STORAGE_SQLITE_PATH 覆盖为 env_override_val
+        assert cfg["storage"]["sqlite_path"] == "env_override_val"
+        del os.environ["MY_DB"]
+        del os.environ["STORAGE_SQLITE_PATH"]
+
+    def test_override_nested_key(self, tmp_path):
+        """嵌套键按层级正确扁平化 (llm.gateway.model → LLM_GATEWAY_MODEL)"""
+        os.environ["LLM_GATEWAY_MODEL"] = "gpt-4"
+        _write_yaml(tmp_path, "t.yaml",
+                     'llm:\n  gateway:\n    model: "smart-router"')
+        from zrag.config.loader import load_config
+        cfg = load_config(str(tmp_path))
+        assert cfg["llm"]["gateway"]["model"] == "gpt-4"
+        del os.environ["LLM_GATEWAY_MODEL"]
