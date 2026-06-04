@@ -187,13 +187,10 @@
 | 39 | SourcesView 页面 | ✅ | - | `ccb023e` |
 | 40 | 404 页面 + 全局错误处理 | ✅ | - | `59817a7` |
 | 41 | 响应式布局 | ✅ | - | `6581c3f` |
+| — | YAML 配置系统 + 模块集成 | ✅ | 28 | `acc0e23` |
 | 42 | Dockerfile.backend + uwsgi.ini + entrypoint.sh | ⬜ | - | - |
 | 43 | Dockerfile.frontend | ⬜ | - | - |
 | 44 | nginx.conf | ⬜ | - | - |
 | 45 | docker-compose.yml + .env 模板 + .dockerignore | ⬜ | - | - |
 
 - ✅ 已完成 · 🔄 进行中 · ⬜ 待开始 · ⚠ HITL 升级
-
-> **注1**: 切片 1（配置加载）已进一步增强——支持 `${VAR:-default}` 语法，`_resolve_env_vars` 新增未定义变量检测。`config/` 目录包含 6 个 YAML 文件（llm/embedding/ingest/api/storage/retrieval），是部署切片 42-45 的隐式依赖。
->
-> **注2**: 配置系统改造完成后，同步新增测试文件 `tests/test_config/`，覆盖 loader 单元测试（11 个）、YAML schema 校验（8 个）及模块集成测试。
