@@ -149,7 +149,7 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 
 ### 配置管理
 
-- config/ 目录下按模块分文件：database.yaml、chroma.yaml、embedding.yaml、llm.yaml 等
+- config/ 目录下按模块分文件：llm.yaml、embedding.yaml、ingest.yaml、api.yaml、storage.yaml、retrieval.yaml
 - 动态合并加载器：排序 glob → 合并嵌套键 → 解析环境变量 ${VAR}
 - Django 敏感配置（DEBUG、SECRET_KEY、ALLOWED_HOSTS）统一通过 .env 管理
 
@@ -233,5 +233,5 @@ CREATE TABLE messages (id TEXT PK, conversation_id TEXT FK, role TEXT, content T
 - 参考项目：zonebank（DRF 模式、异常处理、uWSGI 配置）
 - LiteLLM Gateway 配置位于 ~/.claude/litellm/config.yaml，已配置 smart-router 负载均衡
 - 整个项目在同一 Git 仓库中（zrag/ 后端 + frontend/ 前端）
-- 全部模块设计方案及各模块代码片段记录于 docs/QA.md（Q0-Q34）
+- 全部模块设计方案及各模块代码片段记录于 docs/QA.md（Q0-Q35）
 - 全程无 LangChain/LlamaIndex/FastAPI/手写 BM25/Jinja2 服务端渲染

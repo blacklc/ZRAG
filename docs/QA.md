@@ -1140,26 +1140,30 @@ config/
 ├── ingest.yaml
 ├── api.yaml
 ├── storage.yaml
-└── logging.yaml
+└── retrieval.yaml
 ```
 
 **各模块配置**:
 
 ```yaml
 # config/llm.yaml
+# gateway 配置用于连接 LiteLLM Gateway
 llm:
   provider: "gateway"
+  timeout: 200
   gateway:
-    base_url: "http://localhost:4000/v1"
-    api_key: "${LITELLM_MASTER_KEY}"
+    base_url: "${LLM_GATEWAY_URL:-http://localhost:4000/v1}"
+    api_key: "${LITELLM_MASTER_KEY:-sk-dummy}"
     model: "smart-router"
 ```
 
 ```yaml
 # config/embedding.yaml
+# 使用 BAAI/bge-small-zh-v1.5，输出 512 维向量
+# cache_dir 在容器部署时默认为 /app/models（只读 volume 挂载点）
 embedding:
   model_name: "BAAI/bge-small-zh-v1.5"
-  cache_dir: null
+  cache_dir: "${MODELS_DIR:-/app/models}"
   device: "cpu"
 ```
 
@@ -1172,34 +1176,54 @@ ingest:
 ```yaml
 # config/api.yaml
 api:
-  key: "${ZRAG_API_KEY}"
+  key: "${ZRAG_API_KEY:-}"
   query_max_length: 2000
 ```
 
 ```yaml
 # config/storage.yaml
+# 路径为相对路径，相对于 Django manage.py 所在目录（即项目根）
+# 容器部署时映射到 /app/data/ 持久化 volume
 storage:
   sqlite_path: "data/zrag.db"
   chroma_path: "data/chroma_db"
 ```
 
 ```yaml
-# config/logging.yaml
-logging:
-  level: "INFO"
-  dir: "log"
+# config/retrieval.yaml
+retrieval:
+  top_k: 10
 ```
 
 **配置加载器**:
 
 ```python
 # zrag/config/loader.py
+from pathlib import Path
+
+
 def load_config(config_dir: str = "config") -> dict:
-    """扫描目录下所有 .yaml 文件，按 top-level key 深度合并"""
+    """加载并合并配置文件中所有 YAML 文件
+
+    扫描指定目录下所有 .yaml 文件，按 top-level key 进行深度合并。
+    若多个文件存在相同 key，则按规则合并：dict 深度合并，非 dict 后覆盖前。
+    合并完成后对配置项中的 ${ENV_VAR} 进行环境变量替换。
+
+    @param config_dir: 配置文件的存放目录路径, defaults to "config"
+    @type  config_dir: str, optional
+
+    @raises: 当配置项中包含未定义的环境变量时抛出
+    @type:   ValueError
+
+    @return: 合并后的配置字典
+    @type:   dict
+    """
     config = {}
     config_path = Path(config_dir)
+    if not config_path.exists():
+        return config
     for yaml_file in sorted(config_path.glob("*.yaml")):
-        data = yaml.safe_load(f.read_text())
+        data = _yaml.safe_load(yaml_file.read_text())
         if not data:
             continue
         for key, value in data.items():
@@ -1207,25 +1231,77 @@ def load_config(config_dir: str = "config") -> dict:
                 config[key] = {**config[key], **value}
             else:
                 config[key] = value
-
-    _resolve_env_vars(config)       # ${ENV_VAR} 替换为实际环境变量值
+    _resolve_env_vars(config)
     return config
+
+
+def _resolve_env_vars(config: dict) -> None:
+    """递归替换配置中所有 ${ENV_VAR} 为环境变量实际值
+
+    遍历配置字典的每一项，若值为字符串则查找 ${VAR} 模式并替换为 os.environ 中的变量值。
+    若某个环境变量未定义，则抛出 ValueError 并提示该变量名。
+    若值为 dict，递归处理其子项。
+
+    @param config: 需要执行环境变量替换的配置字典。该字典会被原地修改。
+    @type  config: dict
+
+    @raises: 当 ${VAR} 中的 VAR 在环境变量中不存在时抛出
+    @type:   ValueError
+    """
+    import os as _os
+    import re as _re
+
+    pattern = _re.compile(r'\$\{(\w+)(?::-([^}]*))?\}')
+
+    def _resolve(value):
+        if isinstance(value, str):
+            def _replace(m):
+                var_name = m.group(1)
+                default_val = m.group(2)
+                env_val = _os.environ.get(var_name)
+                if env_val is not None:
+                    return env_val
+                if default_val is not None:
+                    return default_val
+                raise ValueError(f"环境变量 {var_name} 未定义且无默认值")
+            return pattern.sub(_replace, value)
+        if isinstance(value, dict):
+            return {k: _resolve(v) for k, v in value.items()}
+        return value
+
+    for key in list(config.keys()):
+        config[key] = _resolve(config[key])
+
+
+try:
+    import yaml as _yaml
+except ImportError:
+    import warnings as _w
+    _w.warn("PyYAML not installed; load_config will fail at runtime")
+    _yaml = None
 ```
 
 **settings.py 集成**:
 
 ```python
+import os
+from pathlib import Path
+
 from zrag.config.loader import load_config
+
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 _config = load_config("config")
 
-# 映射为 ZRAG_* 快捷变量，供各模块使用
-ZRAG_API_KEY = _config["api"]["key"]
-ZRAG_LLM_PROVIDER = _config["llm"]["provider"]
-# ... 各项 ZRAG_* 变量
+ZRAG_API_KEY = _config.get("api", {}).get("key", "")
+ZRAG_LLM = _config.get("llm", {})
+ZRAG_EMBEDDING = _config.get("embedding", {})
+ZRAG_STORAGE = _config.get("storage", {})
+ZRAG_INGEST = _config.get("ingest", {})
+ZRAG_RETRIEVAL = _config.get("retrieval", {})
 ```
 
-**与已有代码的兼容性**: `load_config()` 返回的 dict 结构与已有代码引用的结构完全一致（`_config["llm"]["provider"]` 等），无需修改任何已有代码。`settings.ZRAG_*` 是额外快捷访问。
+各模块读取配置的典型模式：模块构造函数参数默认 None，从 `settings.ZRAG_*` 自动读取，配置缺失时抛 `ValueError`（不静默兜底）。
 
 ---
 
