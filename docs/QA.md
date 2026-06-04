@@ -1232,6 +1232,7 @@ def load_config(config_dir: str = "config") -> dict:
             else:
                 config[key] = value
     _resolve_env_vars(config)
+    _override_from_env(config)
     return config
 
 
@@ -1273,6 +1274,58 @@ def _resolve_env_vars(config: dict) -> None:
         config[key] = _resolve(config[key])
 
 
+def _override_from_env(config: dict, prefix: str = "") -> None:
+    """使用环境变量覆盖配置项
+
+    递归遍历配置字典的全部叶子节点，检查是否存在同名 UPPER_SNAKE 环境变量。
+    若存在，则用环境变量的值覆盖配置项，并根据 YAML 原值类型做类型转换。
+
+    扁平化规则: llm.timeout -> LLM_TIMEOUT, llm.gateway.base_url -> LLM_GATEWAY_BASE_URL
+    类型转换规则:
+      - YAML 原值是 int -> 环境变量值 int(var)，转换失败抛 ValueError
+      - YAML 原值是 float -> 环境变量值 float(var)
+      - YAML 原值是 bool -> 环境变量值 var.lower() in ('true', '1', 'yes')
+      - YAML 原值是 str -> 直接使用环境变量值
+      - YAML 原值是 None -> 直接使用环境变量值
+
+    环境变量覆盖发生在 ${VAR:-default} 替换之后，
+    因此 env override 可以覆盖 `${VAR:-default}` 解析后的结果。
+
+    @param config: 已完成 ${VAR} 替换的配置字典。该字典会被原地修改。
+    @type  config: dict
+    @param prefix: 当前递归层级的前缀，内部使用
+    @type  prefix: str
+    """
+    import os as _os
+
+    for key, value in list(config.items()):
+        env_key = f"{prefix}{key.upper()}" if not prefix else f"{prefix}_{key.upper()}"
+        if isinstance(value, dict):
+            _override_from_env(value, prefix=env_key)
+            continue
+        env_val = _os.environ.get(env_key)
+        if env_val is None:
+            continue
+        if isinstance(value, bool):
+            config[key] = env_val.lower() in ("true", "1", "yes")
+        elif isinstance(value, int):
+            try:
+                config[key] = int(env_val)
+            except ValueError:
+                raise ValueError(
+                    f"环境变量 {env_key} 的值 '{env_val}' 无法转换为 int"
+                )
+        elif isinstance(value, float):
+            try:
+                config[key] = float(env_val)
+            except ValueError:
+                raise ValueError(
+                    f"环境变量 {env_key} 的值 '{env_val}' 无法转换为 float"
+                )
+        else:
+            config[key] = env_val
+
+
 try:
     import yaml as _yaml
 except ImportError:
@@ -1280,6 +1333,33 @@ except ImportError:
     _w.warn("PyYAML not installed; load_config will fail at runtime")
     _yaml = None
 ```
+
+**三阶段配置加载流程**:
+
+1. **YAML 文件合并**: 扫描 `config/` 目录下所有 `.yaml` 文件，按 top-level key 深度合并，dict 深度合并，非 dict 后覆盖前。
+2. **${VAR:-default} 解析**: `_resolve_env_vars` 递归替换所有 `${ENV_VAR}` 占位符，支持 `${VAR:-default}` 默认值语法。
+3. **环境变量覆盖**: `_override_from_env` 使用同名 UPPER_SNAKE 环境变量覆盖配置项的叶子节点。
+
+**env override 规则说明**:
+
+- **扁平化 key 命名规则**: 嵌套 key 的路径以 `_` 连接并转大写，例如:
+  - `llm.timeout` -> `LLM_TIMEOUT`
+  - `llm.gateway.base_url` -> `LLM_GATEWAY_BASE_URL`
+  - `storage.sqlite_path` -> `STORAGE_SQLITE_PATH`
+  - `embedding.cache_dir` -> `EMBEDDING_CACHE_DIR`
+  - `api.query_max_length` -> `API_QUERY_MAX_LENGTH`
+  - `retrieval.top_k` -> `RETRIEVAL_TOP_K`
+  - `ingest.batch_size` -> `INGEST_BATCH_SIZE`
+
+- **类型自动转换**: 根据 YAML 原值的类型自动将环境变量字符串转为对应的 Python 类型：
+  - YAML 中为 int -> `int(env_val)`
+  - YAML 中为 float -> `float(env_val)`
+  - YAML 中为 bool -> `env_val.lower() in ('true', '1', 'yes')`
+  - YAML 中为 str -> 直接使用环境变量字符串
+
+- **覆盖优先级**: 环境变量覆盖发生在 `${VAR:-default}` 替换之后，因此 env override 可以覆盖 `${VAR:-default}` 解析后的结果。
+
+- **容器部署场景**: 在 Docker 容器部署中，无需修改 YAML 配置文件，只需在 `docker-compose.yml` 的 `environment` 中或 `.env` 文件中添加对应的 UPPER_SNAKE 环境变量即可覆盖任意配置项。修改配置后执行 `docker compose restart` 使更改生效。
 
 **settings.py 集成**:
 

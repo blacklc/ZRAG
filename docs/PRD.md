@@ -150,7 +150,14 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 ### 配置管理
 
 - config/ 目录下按模块分文件：llm.yaml、embedding.yaml、ingest.yaml、api.yaml、storage.yaml、retrieval.yaml
-- 动态合并加载器：排序 glob → 合并嵌套键 → 解析环境变量 ${VAR}
+- 动态合并加载器：排序 glob -> 合并嵌套键 -> 解析环境变量 ${VAR} -> 环境变量覆盖
+- 配置加载三阶段流程：
+  - 阶段 1：YAML 文件扫描合并
+  - 阶段 2：${VAR:-default} 占位符递归替换
+  - 阶段 3：同名 UPPER_SNAKE 环境变量覆盖叶子节点（如 LLM_TIMEOUT 覆盖 llm.timeout）
+- 环境变量覆盖优先级高于 YAML 配置和 ${VAR:-default} 默认值
+- 配置变更流程：修改 .env -> docker compose restart
+- 容器部署场景下无需修改 YAML 文件，通过 docker-compose environment 或 .env 即可覆盖任意配置项
 - Django 敏感配置（DEBUG、SECRET_KEY、ALLOWED_HOSTS）统一通过 .env 管理
 
 ### 部署
