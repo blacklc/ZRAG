@@ -6,9 +6,9 @@
 
 ```
          ┌──────────────────────────────────┐
-         │           Nginx :80              │
-         │    (宿主机 :8080 → 容器 :80)      │
-         │    URL: http://host:8080/zrag/   │
+         │         Nginx :80                │
+         │    容器内 :80, 宿主机 :80        │
+         │    URL: http://host/zrag/        │
          └──────┬───────────────┬───────────┘
                 ▼               ▼
          ┌──────────┐    ┌─────────────┐
@@ -188,7 +188,7 @@ cp .env.example .env
 docker compose up -d --build
 
 # 3. 访问
-open http://localhost:8080/zrag/
+open http://localhost/zrag/
 ```
 
 ### 配置变更
@@ -205,7 +205,7 @@ docker compose restart
 
 | 容器 | 镜像 | 内部端口 | 说明 |
 |------|------|:--------:|------|
-| `nginx` | `nginx:alpine` | 80（容器内）→ 宿主机 :8080 | 反向代理 `/zrag/` → frontend:80, `/zrag/v1/` → backend:5965 |
+| `nginx` | `nginx:alpine` | 80（容器内同宿主机） | 反向代理 `/zrag/` → frontend:80, `/zrag/v1/` → backend:5965 |
 | `frontend` | 自定义 `Dockerfile.frontend` | 80 | Vue 静态文件 |
 | `backend` | 自定义 `Dockerfile.backend` | 5965 | Django + uWSGI |
 
@@ -223,7 +223,7 @@ docker compose restart
 | `GET` | `/v1/health/live` | 存活检查 |
 | `GET` | `/v1/health/ready` | 就绪检查 |
 
-> **注意**: 生产环境通过 nginx 代理时，实际的 API 路径为 `http://localhost:8080/zrag/v1/...`，nginx 会自动将 `/zrag/` 前缀重写为后端路径。
+> **注意**: 生产环境通过 nginx 代理时，实际的 API 路径为 `http://localhost/zrag/v1/...`，nginx 会自动将 `/zrag/` 前缀重写为后端路径。
 > 开发环境直接通过 `http://localhost:5173/v1/...` 访问（Vite 代理自动转发到后端 `:5965`）。
 
 所有 API 端点（除 health 外）需要在请求头中携带 `Authorization: Bearer <ZRAG_API_KEY>`。
