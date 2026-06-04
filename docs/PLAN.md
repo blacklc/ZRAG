@@ -188,7 +188,7 @@
 | 40 | 404 页面 + 全局错误处理 | ✅ | - | `59817a7` |
 | 41 | 响应式布局 | ✅ | - | `6581c3f` |
 | — | YAML 配置系统 + 模块集成 | ✅ | 28 | `acc0e23` |
-| 42 | Dockerfile.backend + uwsgi.ini + entrypoint.sh | ⬜ | - | - |
+| 42 | Dockerfile.backend + uwsgi.ini + entrypoint.sh | ✅ | - | `3674def` |
 | 43 | Dockerfile.frontend | ⬜ | - | - |
 | 44 | nginx.conf | ⬜ | - | - |
 | 45 | docker-compose.yml + .env 模板 + .dockerignore | ⬜ | - | - |
