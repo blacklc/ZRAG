@@ -1,0 +1,116 @@
+# =============================================================================
+# docker-compose.yml — ZRAG 容器化编排
+#
+# 包含三个服务:
+#   nginx    — 反向代理, 统一入口 (端口 8080)
+#   frontend — 前端静态资源 (nginx:alpine, 内部 80 端口)
+#   backend  — Django uWSGI 后端 (python:3.10-slim, 内部 5965 端口)
+#
+# 启动顺序由 depends_on + healthcheck 控制:
+#   frontend 与 backend 各自完成健康检查后, nginx 才启动。
+#
+# 用法:
+#   docker compose up -d
+#   docker compose down
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # nginx — 反向代理网关
+  # 将外部 8080 端口映射到内部, 根据路径分发至 frontend 或 backend。
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.5"
+
+  # ---------------------------------------------------------------------------
+  # frontend — 前端静态资源服务
+  # 使用多阶段 Dockerfile.frontend 构建, VITE_API_KEY 通过构建参数注入。
+  # 不对外暴露端口, 仅通过 nginx 反向代理访问。
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_KEY: ${ZRAG_API_KEY}
+    expose:
+      - "80"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.5"
+
+  # ---------------------------------------------------------------------------
+  # backend — Django uWSGI 后端服务
+  # 使用多阶段 Dockerfile.backend 构建。
+  # 数据、模型和日志目录通过 volumes 挂载。
+  # 不对外暴露端口, 仅通过 nginx 反向代理访问。
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    expose:
+      - "5965"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models:ro
+      - ./logs:/app/log
+    environment:
+      - LLM_GATEWAY_URL=${LLM_GATEWAY_URL:-http://host.docker.internal:4000/v1}
+      - LLM_GATEWAY_MODEL=${LLM_GATEWAY_MODEL:-smart-router}
+      - ZRAG_API_KEY=${ZRAG_API_KEY}
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+      - MODELS_DIR=${MODELS_DIR:-/app/models}
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
+      - DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS:-localhost}
+      - DJANGO_TIME_ZONE=${DJANGO_TIME_ZONE:-Asia/Shanghai}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5965/v1/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "2"
