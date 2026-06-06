@@ -75,13 +75,20 @@ class DocumentViewSet(viewsets.ViewSet):
                 request=request,
             )
 
+        from zrag.embed.local import BgeSmallEmbedder
+        from zrag.ingest.chunking.registry import get_chunker
+        from zrag.store.vector_store import ChromaStore
+
         source = source_cls()
         store = SQLiteStore()
+        chroma_store = ChromaStore()
+        embedder = BgeSmallEmbedder()
+        chunker = get_chunker(source_type)
         pipeline = IngestionPipeline(
             sqlite_store=store,
-            chroma_store=None,
-            embedder=None,
-            chunker=None,
+            chroma_store=chroma_store,
+            embedder=embedder,
+            chunker=chunker,
         )
         report = pipeline.run(source=source, full=full)
 
@@ -175,32 +182,34 @@ class ConversationViewSet(viewsets.ViewSet):
         """获取 Retriever 实例 (懒加载)
 
         优先使用实例属性 self.retriever, 若未设置则根据
-        self.store / self.chroma_store / self.embedder 构建。
-        若均未配置则抛 RuntimeError 提示调用方注入。
-
-        @raises RuntimeError: 当未注入 retriever 且无法自动构建时抛出
+        self.chroma_store / self.embedder 构建。
+        若 chroma_store 或 embedder 未注入, 则使用默认实例 (从配置读取)。
 
         @return: Retriever 实例
         @rtype:  Retriever
         """
         if hasattr(self, 'retriever') and self.retriever is not None:
             return self.retriever
-        if (
-            hasattr(self, 'chroma_store') and self.chroma_store is not None
-            and hasattr(self, 'embedder') and self.embedder is not None
-        ):
-            from zrag.retrieval.retriever import Retriever
-            store = self._get_store()
-            self.retriever = Retriever(
-                sqlite_store=store,
-                chroma_store=self.chroma_store,
-                embedder=self.embedder,
-            )
-            return self.retriever
-        raise RuntimeError(
-            "retriever not configured. Please inject retriever or "
-            "set chroma_store and embedder on the ViewSet."
+        from zrag.embed.local import get_embedder
+        from zrag.retrieval.retriever import Retriever
+        from zrag.store.vector_store import get_chroma_store
+        chroma = (
+            self.chroma_store
+            if hasattr(self, 'chroma_store') and self.chroma_store is not None
+            else get_chroma_store()
         )
+        emb = (
+            self.embedder
+            if hasattr(self, 'embedder') and self.embedder is not None
+            else get_embedder()
+        )
+        store = self._get_store()
+        self.retriever = Retriever(
+            sqlite_store=store,
+            chroma_store=chroma,
+            embedder=emb,
+        )
+        return self.retriever
 
     def _get_llm(self):
         """获取 LLMProvider 实例 (懒加载)

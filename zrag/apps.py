@@ -30,6 +30,10 @@ class ZragConfig(AppConfig):
         store = SQLiteStore(db_path)
         store.init_db()
 
-        # ChromaDB 初始化（自动创建 data/ 目录下的 chroma_db/）
-        from zrag.store.vector_store import ChromaStore
-        ChromaStore(persist_dir=chroma_path).init_collection()
+        # ChromaDB 初始化（单例模式，避免 SQLite 锁冲突）
+        from zrag.store.vector_store import get_chroma_store
+        get_chroma_store(persist_dir=chroma_path).init_collection()
+
+        # 预加载 BGE Embedding 模型（单例模式，避免重复加载）
+        from zrag.embed.local import get_embedder
+        get_embedder()

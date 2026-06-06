@@ -60,8 +60,8 @@ services:
       - "5965"
     volumes:
       - ./data/pro:/app/data
-      - ./models:/app/models:ro
-      - ./logs:/app/log
+      - /Users/lichen/Documents/workspace/models:/app/models:ro
+      - ./logs/pro:/app/log
     environment:
       - LLM_GATEWAY_URL=${LLM_GATEWAY_URL:-http://host.docker.internal:4000/v1}
       - LLM_GATEWAY_MODEL=${LLM_GATEWAY_MODEL:-smart-router}
@@ -73,11 +73,13 @@ services:
       - DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS:-localhost}
       - DJANGO_TIME_ZONE=${DJANGO_TIME_ZONE:-Asia/Shanghai}
     restart: unless-stopped
+    stop_grace_period: 310s
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5965/v1/health/live"]
-      interval: 10s
+      interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 30s
     logging:
       driver: "json-file"
       options:
@@ -86,5 +88,5 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 768M
           cpus: "2"

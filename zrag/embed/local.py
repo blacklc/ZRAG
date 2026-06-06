@@ -87,3 +87,31 @@ class BgeSmallEmbedder(EmbeddingModel):
         @type:   int
         """
         return 512
+
+
+# 模块级单例, 由 get_embedder() 管理
+_embedder_instance = None
+
+
+def get_embedder(
+    model_name: str | None = None, cache_dir: str | None = None,
+) -> BgeSmallEmbedder:
+    """获取 BgeSmallEmbedder 模块级单例
+
+    避免在 uWSGI worker 中重复创建 SentenceTransformer 实例,
+    防止模型重复加载导致请求挂死。
+
+    @param model_name: 模型名称, 仅首次调用时生效, defaults to None
+    @type  model_name: str, optional
+    @param cache_dir: 模型缓存目录, 仅首次调用时生效, defaults to None
+    @type  cache_dir: str, optional
+
+    @return: BgeSmallEmbedder 全局唯一实例
+    @rtype:  BgeSmallEmbedder
+    """
+    global _embedder_instance
+    if _embedder_instance is None:
+        _embedder_instance = BgeSmallEmbedder(
+            model_name=model_name, cache_dir=cache_dir,
+        )
+    return _embedder_instance

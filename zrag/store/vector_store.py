@@ -165,3 +165,25 @@ class ChromaStore:
         """
         col = self._get_collection()
         return col.count()
+
+
+# 模块级单例, 由 get_chroma_store() 管理
+_chroma_store_instance = None
+
+
+def get_chroma_store(persist_dir: str | None = None) -> ChromaStore:
+    """获取 ChromaStore 模块级单例
+
+    避免在 uWSGI worker 中重复创建 ChromaDB PersistentClient,
+    防止 SQLite 锁冲突导致请求挂死。
+
+    @param persist_dir: ChromaDB 持久化目录, 仅首次调用时生效, defaults to None
+    @type  persist_dir: str, optional
+
+    @return: ChromaStore 全局唯一实例
+    @rtype:  ChromaStore
+    """
+    global _chroma_store_instance
+    if _chroma_store_instance is None:
+        _chroma_store_instance = ChromaStore(persist_dir=persist_dir)
+    return _chroma_store_instance

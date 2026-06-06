@@ -25,6 +25,7 @@ ALLOWED_HOSTS = ['localhost']
 
 INSTALLED_APPS = [
     'django.contrib.contenttypes',
+    'django.contrib.staticfiles',
     'rest_framework',
     'corsheaders',
     'zrag',
@@ -63,3 +64,107 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'static')
 LANGUAGE_CODE = 'zh-hans'
 TIME_ZONE = 'Asia/Shanghai'
 USE_TZ = True
+
+# =============================================================================
+# 日志配置
+#
+# 双路径输出:
+#   1. console — 流式输出到 stdout/stderr (供 Docker json-file driver 捕获)
+#   2. file    — 按天轮转文件输出, 保留 7 天, UTF-8 编码
+#
+# 格式: 时间戳 [级别] 线程ID 函数名:行号 消息内容
+# =============================================================================
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '%(asctime)s [%(levelname)s] %(thread)d %(funcName)s:%(lineno)d %(message)s',
+        },
+    },
+    'filters': {
+        'level_debug': {
+            '()': 'zrag.log_filter.ExactLevelFilter',
+            'level': 'DEBUG',
+        },
+        'level_info': {
+            '()': 'zrag.log_filter.ExactLevelFilter',
+            'level': 'INFO',
+        },
+        'level_warning': {
+            '()': 'zrag.log_filter.ExactLevelFilter',
+            'level': 'WARNING',
+        },
+        'level_error': {
+            '()': 'zrag.log_filter.ExactLevelFilter',
+            'level': 'ERROR',
+        },
+    },
+    'handlers': {
+        'console': {
+            'level': 'DEBUG',
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+        'file_debug': {
+            'level': 'DEBUG',
+            'class': 'logging.handlers.TimedRotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'log', 'debug.log'),
+            'when': 'D',
+            'interval': 1,
+            'backupCount': 7,
+            'encoding': 'utf-8',
+            'formatter': 'verbose',
+            'filters': ['level_debug'],
+        },
+        'file_info': {
+            'level': 'INFO',
+            'class': 'logging.handlers.TimedRotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'log', 'info.log'),
+            'when': 'D',
+            'interval': 1,
+            'backupCount': 7,
+            'encoding': 'utf-8',
+            'formatter': 'verbose',
+            'filters': ['level_info'],
+        },
+        'file_warning': {
+            'level': 'WARNING',
+            'class': 'logging.handlers.TimedRotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'log', 'warning.log'),
+            'when': 'D',
+            'interval': 1,
+            'backupCount': 7,
+            'encoding': 'utf-8',
+            'formatter': 'verbose',
+            'filters': ['level_warning'],
+        },
+        'file_error': {
+            'level': 'ERROR',
+            'class': 'logging.handlers.TimedRotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'log', 'error.log'),
+            'when': 'D',
+            'interval': 1,
+            'backupCount': 7,
+            'encoding': 'utf-8',
+            'formatter': 'verbose',
+            'filters': ['level_error'],
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console', 'file_debug', 'file_info', 'file_warning', 'file_error'],
+            'level': 'DEBUG' if DEBUG else 'INFO',
+            'propagate': False,
+        },
+        'django.request': {
+            'handlers': ['console', 'file_debug', 'file_info', 'file_warning', 'file_error'],
+            'level': 'DEBUG' if DEBUG else 'INFO',
+            'propagate': False,
+        },
+    },
+    'root': {
+        'handlers': ['console', 'file_debug', 'file_info', 'file_warning', 'file_error'],
+        'level': 'DEBUG' if DEBUG else 'INFO',
+    },
+}
