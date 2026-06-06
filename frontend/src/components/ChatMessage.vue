@@ -185,7 +185,9 @@ const renderedHtml = computed(() => renderMarkdown(props.message.content))
 const formattedTime = computed(() => {
   const iso = props.message.created_at
   if (!iso) return ''
-  const d = new Date(iso)
+  // SQLite datetime('now') 返回 UTC 但无时区标识（如 "2026-06-06 09:51:08"）。
+  // 追加 Z 后缀让 JavaScript 按 UTC 解析，getHours() 会自动转为本地时区显示。
+  const d = new Date(iso.replace(' ', 'T') + 'Z')
   if (Number.isNaN(d.getTime())) return iso
   const hh = String(d.getHours()).padStart(2, '0')
   const mm = String(d.getMinutes()).padStart(2, '0')

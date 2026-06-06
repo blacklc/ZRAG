@@ -49,8 +49,9 @@ function formatRelativeDiff(diffSec, date) {
  */
 export function formatRelativeTime(isoTime) {
   if (!isoTime) return ''
-  const date = new Date(isoTime)
-  if (Number.isNaN(date.getTime())) return ''
+  // SQLite datetime('now') 返回 UTC 但无时区标识，追加 Z 让 JS 按 UTC 解析
+  const date = new Date(isoTime.replace(' ', 'T') + 'Z')
+  if (Number.isNaN(date.getTime())) return isoTime
   const diffSec = Math.floor((Date.now() - date.getTime()) / 1000)
-  return formatRelativeDiff(diffSec, date)
+  return formatRelativeDiff(Math.max(0, diffSec), date)
 }
