@@ -192,5 +192,7 @@
 | 43 | Dockerfile.frontend | ✅ | - | `a98ea3d` |
 | 44 | nginx.conf | ✅ | - | `871441d` |
 | 45 | docker-compose.yml + .env 模板 + .dockerignore | ✅ | - | `11b1f83` |
+| — | 构建修复: requirements.txt 精简 + curl + log 路径修正 + views.py 延迟导入 | ✅ | - | `(待提交)` |
+| — | 日志分级拆分: log_filter.py + settings.py 4 文件 | ✅ | - | `(待提交)` |
 
 - ✅ 已完成 · 🔄 进行中 · ⬜ 待开始 · ⚠ HITL 升级

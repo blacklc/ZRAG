@@ -2706,3 +2706,84 @@ from sentence_transformers import SentenceTransformer
 SentenceTransformer('BAAI/bge-small-zh-v1.5')
 "
 ```
+
+---
+
+## Q36: 容器镜像跨平台构建失败问题
+
+**用户**: Docker 构建 `zrag-backend` 反复失败，pip install `requirements.txt` 依赖冲突。
+
+**现象**: macOS `pip freeze` 生成的 `requirements.txt`（105 行全 `==` 锁定）拷贝进 Linux Docker 构建时：
+1. `sentence-transformers==5.5.1` 在 Linux 上依赖 `torch>=2.12.0`（~532 MB），但 pip 又回溯到 `sentence-transformers 3.1.0`（要求 `numpy<2.0.0`，与锁定的 `numpy==2.2.6` 冲突）→ `ResolutionImpossible`
+2. 同时拉取了 nvidia-cublas（423 MB）、cudnn（366 MB）、triton（201 MB）等 CUDA 库，合计约 2 GB，且全部为 CPU-only 部署不需要的包
+3. `aiohttp` 下载不完整导致 hash 校验失败（间歇性网络问题）
+
+**根因**:
+
+requirements.txt 中 40+ 个 Python 包包含 C/Rust/Fortran 原生编译扩展（如 `torch`、`onnxruntime`、`tokenizers`、`orjson`、`grpcio`）。根据 PEP 427（Wheel 二进制分发格式规范）和 PEP 425（兼容性标签规范），wheel 文件名的 `platform tag` 字段决定了该 wheel 的适用平台：
+
+- macOS arm64: `torch-2.2.2-cp310-cp310-macosx_11_0_arm64.whl`（链接 Apple MPS/Accelerate）
+- Linux x86_64: `torch-2.2.2-cp310-cp310-manylinux_2_28_x86_64.whl`（链接 CUDA/cuBLAS）
+
+同一个 `==` 版本号在两个平台上对应**不同的 .whl 文件**，且各自声明的传递依赖列表不同（Linux 版需要 nvidia-cublas 等，macOS 版不需要）。
+
+`pip freeze` 锁定的是**版本号字符串**，而非平台特定的 wheel 指纹。它无法捕捉同一版本号在不同平台上依赖链的差异。
+
+**决策**:
+
+1. **精简 `requirements.txt`**: 从 105 行全锁定改为 7 个核心生产直接依赖 `==` 锁定：
+   ```
+   djangorestframework==3.17.1
+   django-cors-headers==4.9.0
+   chromadb==1.5.9
+   sentence-transformers==5.5.1
+   openai==2.40.0
+   uwsgi==2.0.31
+   PyYAML==6.0.3
+   ```
+   传递依赖（torch、numpy、tokenizers、grpcio 等 80+ 包）交由 `pip install` 在 Linux 容器内根据目标平台自行解析版本。
+
+2. **Dockerfile.backend 安装 curl**: `python:3.10-slim` 基础镜像不含 curl，导致 docker-compose healthcheck 的 `curl -f` 命令失败。在 runtime 阶段 `apt-get install curl`。
+
+3. **日志路径修正**: `zrag/settings.py` LOGGING 配置中 `filename` 从 `BASE_DIR / 'logs'` 改为 `BASE_DIR / 'log'`，与 Dockerfile 的 `mkdir -p /app/log` 对齐。
+
+4. **views.py 延迟导入**: `BgeSmallEmbedder` 和 `ChromaStore` 从文件顶部 import 改为函数内懒加载，避免 Django 启动时加载 `sentence-transformers`（重依赖）导致模块导入失败。
+
+**验证结果**:
+
+```
+$ docker ps --format "table {{.Names}}\t{{.Status}}" | grep zrag
+zrag-backend     Up (healthy)
+zrag-frontend    Up (healthy)
+
+$ curl -s -o /dev/null -w "%{http_code}" http://localhost/zrag/v1/health/live
+200
+```
+
+**相关提交**: `(待提交)`
+
+---
+
+## Q37: 后端日志分级拆分
+
+**用户**: 后端日志按级别拆分为独立文件，文件名去掉项目前缀。
+
+**需求来源**:
+1. `@.claude/rules/python-code-style.md` 第 184 行: "不同级别的日志应该存储在独立的日志文件中"
+2. 用户要求文件名去掉 `zrag-` 前缀
+
+**实现**: `zrag/settings.py` 的 `LOGGING` 配置拆分为 4 个文件 handler + 1 个 console handler:
+
+| 文件 | 级别 | Handler |
+|------|------|---------|
+| console (stdout) | DEBUG+ | `logging.StreamHandler` |
+| `debug.log` | 仅 DEBUG | `TimedRotatingFileHandler` + `ExactLevelFilter` |
+| `info.log` | 仅 INFO | `TimedRotatingFileHandler` + `ExactLevelFilter` |
+| `warning.log` | 仅 WARNING | `TimedRotatingFileHandler` + `ExactLevelFilter` |
+| `error.log` | 仅 ERROR+CRITICAL | `TimedRotatingFileHandler` + `ExactLevelFilter` |
+
+**新建文件**: `zrag/log_filter.py` — `ExactLevelFilter` 类，继承 `logging.Filter`，实现精确日志级别匹配。Django LOGGING 配置不支持内联 lambda，必须独立文件。
+
+**验证结果**: 容器启动后 `/app/log/` 下 4 个文件全部创建。`debug.log` 包含 chromadb 初始化 DEBUG 日志，其余文件初始为空。
+
+**镜像体积注意**: 本次构建耗时约 18 分钟（torch 532MB + nvidia 系列 CUDA 包 ~2GB），镜像较大。CPU-only 部署场景可后续改为 CPU-only torch（`--index-url https://download.pytorch.org/whl/cpu`）以减少约 2GB 体积。

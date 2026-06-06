@@ -50,31 +50,6 @@ def set_destroyer(self):
   具体的设定方式请查看self.set_service_base_type()与class ServiceBaseType;
   """
 ```
-- 示例3:
-```python
-def __init__(self, data=None, notify_method_configs: dict = {}) -> None:
-  """构造方法
-
-  为了保证Notifier类对象实例在进行init操作时的一致性,
-  因此将NotifyMethod类的配置参数放入到self.data属性中传入到Notifier类对象中;
-  即没有特殊需求, 不建议开发者重写init方法.
-
-  对于所依赖的NotifyMethod类对象的配置;
-  可通过对象实例方法set_notify_method_default_configs和set_notify_method_configs方法来实现;
-  具体的使用方法请见这两个方法的方法注释.
-
-  @param data: 通知内容/数据, defaults to None
-  @type  data: dict, optional
-  @param notify_method_configs: 通知操作类配置项, defaults to {}
-                                该参数内部的数据结构,
-                                与set_notify_method_default_configs的实现细节相关;
-                                应是set_notify_method_default_configs内包含的配置项的子集;
-                                即需要外界自定义(不使用默认值)的配置项应该定义在该参数中;
-                                注意,
-                                配置项名称(key)应与set_notify_method_default_configs保持一致;
-  @type  notify_method_configs: dict, optional
-  """
-``` 
 
 ## 类注释
 每一个自定义class都需要添加注释,需要说明当前类的用途以及其可能存在的业务含义.
@@ -90,20 +65,6 @@ class Timer():
     """
 ```
 - 示例2: 
-```python
-class BaseDecreaseQueryStrategy(abc.ABC):
-    """弹性缩减中所使用的会议服务资源查询获取策略抽象基类
-
-    在进行弹性缩减的动作之前,需要确定要删除那些会议资源服务;
-    不同种类的会议服务、或是不同的会议集群可能有着特殊的删除资源规则;
-    例如按照会议服务资源创建的时间来过滤查询,或是按照指定的资源类型来过滤查询等等.
-    为了实现能够具备满足各种查询获取需求、能够快速支持对接各种策略的功能;
-    即抽象出当前概念，用于封装各类查询获取需求.
-
-    每个策略类所需要的特殊数据可将其实现为该类的实例对象属性,并通过重写构造方法来从外界接收这些数据.
-    """
-```
-- 示例3: 
 ```python
 class BaseDecreasePolicy(abc.ABC):
     """弹性缩减策略抽象基类
@@ -181,6 +142,8 @@ class BaseDecreasePolicy(abc.ABC):
 ## 日志记录
 - 在功能类中不进行日志记录, 只进行异常捕获和向上抛出.
 - 日志记录只实现在最外层的调用代码中.
+- 不同级别的日志应该存储在独立的日志文件中.
+- 对于CURD类型的操作逻辑, 应该使用日志来记录其操作后的状态(成功、失败等状态)
 
 ## 日志格式
 若用户没有特殊要求, 则使用如下日志格式:

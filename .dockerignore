@@ -13,10 +13,9 @@ venv/
 # Data
 data/
 
-# Frontend
+# Frontend (Dockerfile.frontend 需要 frontend/ 目录)
 node_modules/
 dist/
-frontend/
 
 # IDE
 .idea/

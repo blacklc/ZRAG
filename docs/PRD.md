@@ -163,12 +163,12 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 ### 部署
 
 - 三容器方案：Nginx（反向代理 + gzip）+ Frontend（nginx:alpine + dist/）+ Backend（uWSGI + Django）
-- Nginx：宿主机 8080 端口（避开 macOS 80 端口冲突），depends_on frontend + backend（condition: service_healthy）
+- Nginx：宿主机 80 端口，独立部署（`nginx.sh start`），非 docker-compose 管理
 - Frontend：内部 80 端口，仅 expose
 - Backend：内部 5965 端口，仅 expose
-- 数据持久化：./data:/app/data（zrag.db + chroma_db + django.db）
-- 模型挂载：./models:/app/models:ro（只读）
-- 日志持久化：./logs:/app/log（业务日志）
+- 数据持久化：./data/pro:/app/data（zrag.db + chroma_db + django.db）
+- 模型挂载：/Users/lichen/Documents/workspace/models:/app/models:ro（只读，绝对路径）
+- 日志持久化：./logs/pro:/app/log（业务日志）
 - 环境变量：.env 文件 + docker-compose ${VAR} 引用
 - entrypoint.sh：migrate → collectstatic → uwsgi（建表由 AppConfig.ready() 自动执行 `CREATE TABLE IF NOT EXISTS`）
 - 健康检查：Frontend（curl /）、Backend（curl /v1/health/live）
@@ -177,6 +177,7 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 - 重启策略：unless-stopped
 - Nginx 代理超时：proxy_read_timeout 180s，proxy_connect_timeout 10s
 - 无 CI/CD——手动 docker compose build && up -d
+- **Python 依赖管理策略**: `requirements.txt` 仅锁定核心生产直接依赖（~7 个包，`==` 精确版本）。传递依赖由 `pip install` 在 Docker Linux 容器构建时自行解析版本。不使用 `pip freeze` 全量锁定的方式，避免 macOS（arm64）开发环境与 Linux（amd64）部署环境的跨平台依赖冲突。
 - 时区：Asia/Shanghai
 
 ### 数据库 Schema
