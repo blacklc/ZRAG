@@ -28,6 +28,8 @@ services:
         VITE_API_KEY: ${ZRAG_API_KEY}
     expose:
       - "80"
+    environment:
+      - TZ=Asia/Shanghai
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80/"]
@@ -72,6 +74,7 @@ services:
       - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
       - DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS:-localhost}
       - DJANGO_TIME_ZONE=${DJANGO_TIME_ZONE:-Asia/Shanghai}
+      - TZ=Asia/Shanghai
     restart: unless-stopped
     stop_grace_period: 310s
     healthcheck:
