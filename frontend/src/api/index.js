@@ -137,6 +137,7 @@ export function getUserMessage(error) {
   if (status === 401) return '认证失败，请刷新页面重试'
   if (status === 404) return '请求的资源不存在'
   if (status === 502) return 'AI 服务暂时不可用，请稍后重试'
+  if (status === 429) return '请求过于频繁，请稍后重试'
   if (status >= 500) return '服务器内部错误，请稍后重试'
 
   // 兜底: 返回原始 message

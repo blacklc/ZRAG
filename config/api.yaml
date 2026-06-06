@@ -2,3 +2,6 @@
 api:
   key: "${ZRAG_API_KEY:-}"
   query_max_length: 2000
+  throttle_rates:
+    chat: "60/min"
+    ingest: "3/min"

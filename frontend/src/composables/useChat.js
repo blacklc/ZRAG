@@ -189,11 +189,17 @@ export function useChat() {
    * @returns {Promise<void>}
    */
   async function removeConversation(id) {
+    let serverDeleted = false
     try {
       await deleteConversation(id)
+      serverDeleted = true
     } catch (e) {
-      toast.error(`删除会话失败: ${getUserMessage(e)}`)
-      return
+      if (e?.status === 429) {
+        toast.error('请求过于频繁，请稍后重试')
+      } else {
+        toast.error(`删除会话失败: ${getUserMessage(e)}`)
+        return
+      }
     }
     const idx = conversations.value.findIndex((c) => c.id === id)
     if (idx >= 0) {
