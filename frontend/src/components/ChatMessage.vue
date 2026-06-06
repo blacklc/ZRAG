@@ -20,9 +20,17 @@
       class="relative max-w-[90%] sm:max-w-2xl md:max-w-3xl px-3 py-2.5 sm:px-4 sm:py-3 rounded-lg shadow-sm"
       :class="bubbleClass"
     >
+      <!-- 错误消息: 显示图标 + 纯文本 -->
+      <div
+        v-if="isError"
+        class="flex items-start gap-2 text-sm leading-relaxed"
+      >
+        <span class="shrink-0 mt-0.5 text-base" aria-hidden="true">⚠️</span>
+        <span>{{ message.content }}</span>
+      </div>
       <!-- Markdown 渲染区域 -->
       <div
-        v-if="renderedHtml"
+        v-else-if="renderedHtml"
         class="markdown-body text-sm leading-relaxed break-words"
         v-html="renderedHtml"
       ></div>
@@ -33,7 +41,7 @@
 
       <!-- 来源标注: 仅 assistant 消息显示 -->
       <div
-        v-if="!isUser && hasSources"
+        v-if="!isUser && !isError && hasSources"
         class="mt-3 pt-2 border-t border-gray-200/60 dark:border-gray-600/60"
         data-testid="message-sources"
       >
@@ -56,8 +64,9 @@
         </div>
       </div>
 
-      <!-- 底部栏: 复制按钮 + 时间戳 -->
+      <!-- 底部栏: 复制按钮 + 时间戳 (错误消息不显示) -->
       <div
+        v-if="!isError"
         class="mt-1.5 flex items-center justify-end gap-2 text-xs"
         :class="isUser ? 'text-blue-100/80' : 'text-gray-400 dark:text-gray-500'"
       >
@@ -99,108 +108,7 @@
  * - 支持暗黑模式
  */
 import { computed, ref, onBeforeUnmount, watch } from 'vue'
-import { marked } from 'marked'
-import DOMPurify from 'dompurify'
-import hljs from 'highlight.js/lib/core'
-
-// 引入 highlight.js 常用语言 (按需注册, 减小打包体积)
-// 注意: 这里只引入实际项目中常见的几种, 后续可按需扩展
-import javascript from 'highlight.js/lib/languages/javascript'
-import python from 'highlight.js/lib/languages/python'
-import bash from 'highlight.js/lib/languages/bash'
-import json from 'highlight.js/lib/languages/json'
-import xml from 'highlight.js/lib/languages/xml' // HTML 复用
-import css from 'highlight.js/lib/languages/css'
-import sql from 'highlight.js/lib/languages/sql'
-import typescript from 'highlight.js/lib/languages/typescript'
-import markdown from 'highlight.js/lib/languages/markdown'
-import yaml from 'highlight.js/lib/languages/yaml'
-import shell from 'highlight.js/lib/languages/shell'
-
-// 引入主题样式 (github 用于浅色, github-dark 用于深色)
-// 由于需要随主题切换, 这里同时引入两个 CSS, 通过容器 class 控制可见性
-import 'highlight.js/styles/github.css'
-import 'highlight.js/styles/github-dark.css'
-
-// 注册语言 (幂等)
-hljs.registerLanguage('javascript', javascript)
-hljs.registerLanguage('js', javascript)
-hljs.registerLanguage('python', python)
-hljs.registerLanguage('py', python)
-hljs.registerLanguage('bash', bash)
-hljs.registerLanguage('sh', bash)
-hljs.registerLanguage('shell', shell)
-hljs.registerLanguage('json', json)
-hljs.registerLanguage('html', xml)
-hljs.registerLanguage('xml', xml)
-hljs.registerLanguage('css', css)
-hljs.registerLanguage('sql', sql)
-hljs.registerLanguage('typescript', typescript)
-hljs.registerLanguage('ts', typescript)
-hljs.registerLanguage('markdown', markdown)
-hljs.registerLanguage('md', markdown)
-hljs.registerLanguage('yaml', yaml)
-hljs.registerLanguage('yml', yaml)
-
-// 配置 marked:
-// 1. 启用 GFM (GitHub Flavored Markdown)
-// 2. 自定义 renderer, 让 code 块自动接入 highlight.js 高亮
-marked.setOptions({
-  gfm: true,
-  breaks: true,
-})
-
-const renderer = new marked.Renderer()
-// 重写 code 渲染, 自动调用 highlight.js 高亮
-renderer.code = function (codeObjOrString, infostring) {
-  // marked v14 将 code 签名改为 ({ text, lang, escaped })
-  // 为兼容旧版 (v9), 这里做适配判断
-  let text, lang
-  if (typeof codeObjOrString === 'object' && codeObjOrString !== null) {
-    text = codeObjOrString.text ?? ''
-    lang = codeObjOrString.lang ?? ''
-  } else {
-    text = codeObjOrString
-    lang = infostring ?? ''
-  }
-
-  // 去掉末尾换行 (marked 解析后常带 \n)
-  const raw = String(text).replace(/\n$/, '')
-  const language = (lang || '').trim().toLowerCase()
-  let highlighted
-  if (language && hljs.getLanguage(language)) {
-    try {
-      highlighted = hljs.highlight(raw, { language, ignoreIllegals: true }).value
-    } catch (e) {
-      highlighted = escapeHtml(raw)
-    }
-  } else {
-    try {
-      highlighted = hljs.highlightAuto(raw).value
-    } catch (e) {
-      highlighted = escapeHtml(raw)
-    }
-  }
-  // 使用 template literal 拼接 class, 便于通过 .dark 高亮样式覆盖
-  return `<pre class="hljs"><code class="language-${escapeHtml(language || 'plaintext')}">${highlighted}</code></pre>`
-}
-marked.use({ renderer })
-
-/**
- * 转义 HTML 特殊字符
- * 防止非代码块区域的原始文本被错误解析为 HTML
- *
- * @param {string} str - 原始字符串
- * @returns {string} 转义后的字符串
- */
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
+import { renderMarkdown } from '../composables/useMarkdown.js'
 
 /**
  * 消息数据对象
@@ -246,11 +154,16 @@ const COPIED_HINT_DURATION_MS = 2000
 
 /** 是否为用户消息 */
 const isUser = computed(() => props.message.role === 'user')
+/** 是否为错误消息 */
+const isError = computed(() => props.message.role === 'error')
 
-/** 气泡样式: user 蓝色靠右, assistant 白色/深灰靠左 */
+/** 气泡样式: user 蓝色靠右, assistant 白色/深灰靠左, error 红色靠左 */
 const bubbleClass = computed(() => {
   if (isUser.value) {
     return 'bg-blue-600 text-white rounded-br-sm'
+  }
+  if (isError.value) {
+    return 'bg-red-50 text-red-800 dark:bg-red-900/30 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-bl-sm'
   }
   return 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100 rounded-bl-sm'
 })
@@ -261,31 +174,8 @@ const hasSources = computed(() => {
   return Array.isArray(sources) && sources.length > 0
 })
 
-/**
- * 将 Markdown 文本解析为净化后的 HTML
- * - 使用 marked 解析 Markdown
- * - 使用 DOMPurify 过滤潜在的 XSS 注入
- * - 失败时返回空串, 由模板走纯文本兜底
- */
-const renderedHtml = computed(() => {
-  const text = props.message.content
-  if (!text) return ''
-  try {
-    // 1. 解析 Markdown 为 HTML (renderer 已注入代码高亮)
-    const rawHtml = marked.parse(text)
-    // 2. 净化 (DOMPurify 默认禁止 <script> 等危险标签与属性)
-    //    使用 ADD_TAGS 允许 pre/code 标签 (marked 已生成)
-    //    使用 ADD_ATTR 允许 class 属性 (高亮 token 需 class)
-    const cleanHtml = DOMPurify.sanitize(rawHtml, {
-      ADD_TAGS: ['pre', 'code', 'span'],
-      ADD_ATTR: ['class'],
-    })
-    return cleanHtml
-  } catch (e) {
-    // 解析失败时返回空串, 由模板 fallback 到纯文本展示
-    return ''
-  }
-})
+/** 将 Markdown 文本解析为净化后的 HTML, 失败时返回空串走纯文本兜底 */
+const renderedHtml = computed(() => renderMarkdown(props.message.content))
 
 /**
  * 格式化时间戳为 HH:MM 形式

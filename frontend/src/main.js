@@ -8,12 +8,8 @@
  */
 
 import { createApp } from 'vue'
-import { createRouter, createWebHistory } from 'vue-router'
-
 import App from './App.vue'
-import ChatView from './views/ChatView.vue'
-import SourcesView from './views/SourcesView.vue'
-import NotFoundView from './views/NotFoundView.vue'
+import router from './router/index.js'
 import './style.css'
 
 /** localStorage 中用于持久化暗黑模式偏好的 key */
@@ -48,14 +44,5 @@ function initDarkMode() {
 }
 
 initDarkMode()
-
-const router = createRouter({
-  history: createWebHistory('/zrag/'),
-  routes: [
-    { path: '/', component: ChatView },
-    { path: '/sources', component: SourcesView },
-    { path: '/:pathMatch(.*)*', component: NotFoundView },
-  ],
-})
 
 createApp(App).use(router).mount('#app')

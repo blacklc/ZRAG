@@ -162,96 +162,6 @@
       </div>
     </main>
 
-    <!-- Toast 通知 -->
-    <Teleport to="body">
-      <transition
-        enter-active-class="transition ease-out duration-200"
-        enter-from-class="opacity-0 translate-y-2"
-        enter-to-class="opacity-100 translate-y-0"
-        leave-active-class="transition ease-in duration-150"
-        leave-from-class="opacity-100 translate-y-0"
-        leave-to-class="opacity-0 translate-y-2"
-      >
-        <div
-          v-if="toast.show"
-          class="fixed bottom-6 right-6 z-50 max-w-sm w-full sm:w-auto
-                 rounded-lg shadow-lg overflow-hidden"
-          :class="
-            toast.type === 'success'
-              ? 'bg-green-50 dark:bg-green-900/40 border border-green-200 dark:border-green-800'
-              : 'bg-red-50 dark:bg-red-900/40 border border-red-200 dark:border-red-800'
-          "
-          data-testid="toast"
-          role="alert"
-        >
-          <div class="flex items-start gap-3 p-4">
-            <!-- 成功图标 -->
-            <svg
-              v-if="toast.type === 'success'"
-              xmlns="http://www.w3.org/2000/svg"
-              class="h-5 w-5 text-green-500 shrink-0 mt-0.5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <!-- 失败图标 -->
-            <svg
-              v-else
-              xmlns="http://www.w3.org/2000/svg"
-              class="h-5 w-5 text-red-500 shrink-0 mt-0.5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <div class="flex-1 min-w-0">
-              <p
-                class="text-sm font-medium"
-                :class="
-                  toast.type === 'success'
-                    ? 'text-green-800 dark:text-green-200'
-                    : 'text-red-800 dark:text-red-200'
-                "
-              >
-                {{ toast.message }}
-              </p>
-              <!-- 报告详情 -->
-              <div
-                v-if="lastReport"
-                class="mt-2 text-xs"
-                :class="
-                  toast.type === 'success'
-                    ? 'text-green-700 dark:text-green-300'
-                    : 'text-red-700 dark:text-red-300'
-                "
-              >
-                <span>处理 {{ lastReport.processed || 0 }}</span>
-                <span v-if="lastReport.added" class="ml-2">新增 {{ lastReport.added }}</span>
-                <span v-if="lastReport.skipped" class="ml-2">跳过 {{ lastReport.skipped }}</span>
-                <span v-if="lastReport.failed" class="ml-2">失败 {{ lastReport.failed }}</span>
-              </div>
-            </div>
-            <button
-              type="button"
-              class="shrink-0 -mr-1 -mt-1 p-1 rounded-md
-                     text-gray-400 hover:text-gray-600 dark:hover:text-gray-200
-                     focus:outline-none focus:ring-2 focus:ring-gray-400"
-              aria-label="关闭通知"
-              @click="dismissToast"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      </transition>
-    </Teleport>
   </div>
 </template>
 
@@ -272,16 +182,11 @@
 import { ref, onMounted } from 'vue'
 import NavBar from '../components/NavBar.vue'
 import { listSources, ingestDocuments } from '../api/endpoints.js'
+import { getUserMessage } from '../api/index.js'
+import { useToast } from '../composables/useToast.js'
+import { formatRelativeTime } from '../utils/time.js'
 
-/** Toast 自动消失默认时长 (毫秒) */
-const DEFAULT_TOAST_DURATION_MS = 3000
-/** 时间区间阈值 (秒), 用于相对时间格式化 */
-const RELATIVE_TIME_THRESHOLDS = Object.freeze({
-  MINUTE: 60,
-  HOUR: 3600,
-  DAY: 86400,
-  WEEK: 604800,
-})
+const toast = useToast()
 
 /** 来源列表数据, 每项包含 source_type, doc_count, last_imported */
 const sources = ref([])
@@ -291,50 +196,6 @@ const loading = ref(false)
 const ingesting = ref(false)
 /** 最近一次摄入报告, 用于在 Toast 中展示处理/新增/跳过/失败数 */
 const lastReport = ref(null)
-/**
- * 简单 Toast 状态
- * - show: 是否显示
- * - type: 'success' | 'error'
- * - message: 提示文案
- */
-const toast = ref({ show: false, type: 'success', message: '' })
-/** Toast 自动消失定时器 ID, 用于手动关闭时清理 */
-let toastTimer = null
-
-/**
- * 清除 Toast 自动消失定时器
- *
- * @returns {void}
- */
-function clearToastTimer() {
-  if (toastTimer) {
-    clearTimeout(toastTimer)
-    toastTimer = null
-  }
-}
-
-/**
- * 显示 Toast 通知
- *
- * @param {string} type - 通知类型: 'success' | 'error'
- * @param {string} message - 通知文案
- * @param {number} [duration=3000] - 自动消失时长 (毫秒)
- * @returns {void}
- */
-function showToast(type, message, duration = DEFAULT_TOAST_DURATION_MS) {
-  clearToastTimer()
-  toast.value = { show: true, type, message }
-  toastTimer = setTimeout(() => {
-    toast.value.show = false
-    toastTimer = null
-  }, duration)
-}
-
-/** 手动关闭 Toast, 清理定时器 */
-function dismissToast() {
-  clearToastTimer()
-  toast.value.show = false
-}
 
 /**
  * 将后端返回的来源数据规范为数组
@@ -354,7 +215,7 @@ function normalizeSources(data) {
 /**
  * 加载来源列表
  * - 设置 loading 标志以触发骨架屏
- * - 异常时显示错误 Toast, 并保留现有列表数据
+ * - 异常时使用全局 toast.error 反馈
  *
  * @returns {Promise<void>}
  */
@@ -363,7 +224,7 @@ async function loadSources() {
   try {
     sources.value = normalizeSources(await listSources())
   } catch (err) {
-    showToast('error', `加载来源列表失败: ${err.message || '未知错误'}`)
+    toast.error(`加载来源列表失败: ${getUserMessage(err)}`)
   } finally {
     loading.value = false
   }
@@ -387,53 +248,14 @@ async function handleIngest(full) {
   try {
     const report = await ingestDocuments({ source_type: null, full })
     lastReport.value = report || {}
-    showToast('success', `${actionLabel}完成`)
+    toast.success(`${actionLabel}完成`)
     // 摄入成功后重新拉取来源列表
     await loadSources()
   } catch (err) {
-    showToast('error', `${actionLabel}失败: ${err.message || '未知错误'}`)
+    toast.error(`${actionLabel}失败: ${getUserMessage(err)}`)
   } finally {
     ingesting.value = false
   }
-}
-
-/**
- * 将相对时间值格式化为人类可读字符串
- *
- * @param {number} diffSec - 与当前时间的差值 (秒)
- * @param {Date} date - 原始 Date 对象
- * @returns {string} 相对时间字符串
- */
-function formatRelativeDiff(diffSec, date) {
-  const { MINUTE, HOUR, DAY, WEEK } = RELATIVE_TIME_THRESHOLDS
-  if (diffSec < MINUTE) return '刚刚'
-  if (diffSec < HOUR) return `${Math.floor(diffSec / MINUTE)} 分钟前`
-  if (diffSec < DAY) return `${Math.floor(diffSec / HOUR)} 小时前`
-  if (diffSec < WEEK) return `${Math.floor(diffSec / DAY)} 天前`
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
-
-/**
- * 将 ISO 时间格式化为相对时间字符串
- * - 1 分钟内: 刚刚
- * - 1 小时内: N 分钟前
- * - 24 小时内: N 小时前
- * - 7 天内: N 天前
- * - 超过 7 天: 返回 yyyy-MM-dd 形式
- * - 空值或非法值: 返回空串
- *
- * @param {string} isoTime - ISO 格式时间字符串
- * @returns {string} 相对时间字符串
- */
-function formatRelativeTime(isoTime) {
-  if (!isoTime) return ''
-  const date = new Date(isoTime)
-  if (Number.isNaN(date.getTime())) return ''
-  const diffSec = Math.floor((Date.now() - date.getTime()) / 1000)
-  return formatRelativeDiff(diffSec, date)
 }
 
 /** 组件挂载时加载来源列表 */

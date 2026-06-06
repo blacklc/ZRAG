@@ -382,4 +382,19 @@ function onDocumentClick(event) {
     modelMenuOpen.value = false
   }
 }
+
+/**
+ * 聚焦输入框
+ *
+ * 供父组件通过模板 ref 调用, 用于在新建会话等场景中将光标聚焦到输入框。
+ *
+ * @returns {void}
+ */
+function focus() {
+  nextTick(() => {
+    textareaRef.value?.focus()
+  })
+}
+
+defineExpose({ focus })
 </script>

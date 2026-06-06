@@ -241,6 +241,7 @@
  * - 暗黑模式自适应
  */
 import { ref } from 'vue'
+import { formatRelativeTime } from '../utils/time.js'
 
 /** 会话列表默认占位标题 */
 const DEFAULT_CONVERSATION_TITLE = '新对话'
@@ -294,14 +295,6 @@ const emit = defineEmits([
 const collapsed = ref(false)
 /** 待删除会话对象; 非空时显示确认弹窗 */
 const confirmDelete = ref(null)
-
-/** 时间区间阈值 (秒), 用于相对时间格式化 */
-const RELATIVE_TIME_THRESHOLDS = Object.freeze({
-  MINUTE: 60,
-  HOUR: 3600,
-  DAY: 86400,
-  WEEK: 604800,
-})
 
 /**
  * 切换侧边栏折叠状态
@@ -362,44 +355,5 @@ const confirmDeleteAction = () => {
     emit('delete-conversation', confirmDelete.value.id)
   }
   confirmDelete.value = null
-}
-
-/**
- * 将相对时间值格式化为人类可读字符串
- *
- * @param {number} diffSec - 与当前时间的差值 (秒)
- * @param {Date} date - 原始 Date 对象
- * @returns {string} 相对时间字符串
- */
-function formatRelativeDiff(diffSec, date) {
-  const { MINUTE, HOUR, DAY, WEEK } = RELATIVE_TIME_THRESHOLDS
-  if (diffSec < MINUTE) return '刚刚'
-  if (diffSec < HOUR) return `${Math.floor(diffSec / MINUTE)} 分钟前`
-  if (diffSec < DAY) return `${Math.floor(diffSec / HOUR)} 小时前`
-  if (diffSec < WEEK) return `${Math.floor(diffSec / DAY)} 天前`
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
-
-/**
- * 将 ISO 时间格式化为相对时间字符串
- * - 1 分钟内: 刚刚
- * - 1 小时内: N 分钟前
- * - 24 小时内: N 小时前
- * - 7 天内: N 天前
- * - 超过 7 天: 返回 yyyy-MM-dd 形式
- * - 空值或非法值: 返回空串
- *
- * @param {string} isoTime - ISO 格式时间字符串
- * @returns {string} 相对时间字符串
- */
-const formatRelativeTime = (isoTime) => {
-  if (!isoTime) return ''
-  const date = new Date(isoTime)
-  if (Number.isNaN(date.getTime())) return ''
-  const diffSec = Math.floor((Date.now() - date.getTime()) / 1000)
-  return formatRelativeDiff(diffSec, date)
 }
 </script>

@@ -88,9 +88,9 @@
           data-testid="messages-container"
         >
           <div class="max-w-3xl mx-auto space-y-3 sm:space-y-4">
-            <!-- 空状态: 无激活会话 -->
+            <!-- 空状态: 无激活会话且未发送 -->
             <div
-              v-if="!activeConversationId"
+              v-if="!activeConversationId && !sending"
               class="h-full flex flex-col items-center justify-center text-center px-4"
               data-testid="chat-empty"
             >
@@ -107,6 +107,20 @@
               </p>
               <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
                 在下方输入框中输入你的问题即可开始
+              </p>
+            </div>
+
+            <!-- 发送中但无激活会话: 加载指示器 -->
+            <div
+              v-else-if="!activeConversationId && sending"
+              class="h-full flex flex-col items-center justify-center text-center px-4"
+              data-testid="chat-sending"
+            >
+              <div
+                class="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"
+              ></div>
+              <p class="mt-4 text-sm text-gray-500 dark:text-gray-400">
+                正在思考...
               </p>
             </div>
 
@@ -173,6 +187,7 @@
 
         <!-- 底部: 输入区 (sticky) -->
         <ChatInput
+          ref="chatInputRef"
           v-model="inputText"
           :model="selectedModel"
           :disabled="sending"
@@ -215,14 +230,7 @@ import NavBar from '../components/NavBar.vue'
 import ChatSidebar from '../components/ChatSidebar.vue'
 import ChatMessage from '../components/ChatMessage.vue'
 import ChatInput from '../components/ChatInput.vue'
-import {
-  listConversations,
-  createConversation,
-  getMessages,
-  addMessage,
-  deleteConversation,
-} from '../api/endpoints.js'
-import { useToast } from '../composables/useToast.js'
+import { useChat } from '../composables/useChat.js'
 
 /** Tailwind 'md' 断点 (像素), 与 NavBar 保持一致 */
 const MD_BREAKPOINT_PX = 768
@@ -231,39 +239,37 @@ const DEFAULT_CONVERSATION_TITLE = '新对话'
 /** 默认选中的模型标识 */
 const DEFAULT_MODEL = 'smart-router'
 
-const toast = useToast()
+// ---- 业务逻辑 (useChat composable) ----
+const {
+  conversations,
+  activeConversationId,
+  messages,
+  conversationsLoading,
+  messagesLoading,
+  sending,
+  activeConversation,
+  loadConversations,
+  selectConversation,
+  sendMessage,
+  deleteConversation,
+  resetConversation,
+} = useChat()
 
-/** 会话列表 */
-const conversations = ref([])
-/** 当前激活的会话 ID; null 表示未选中 */
-const activeConversationId = ref(null)
-/** 当前会话的消息列表 */
-const messages = ref([])
+// ---- UI 状态 (ChatView 专属) ----
 /** 输入框文本 (v-model) */
 const inputText = ref('')
+/** ChatInput 组件引用 (用于聚焦) */
+const chatInputRef = ref(null)
 /** 选中的模型; 默认 smart-router */
 const selectedModel = ref(DEFAULT_MODEL)
-/** 会话列表加载状态 */
-const conversationsLoading = ref(false)
-/** 消息加载状态 */
-const messagesLoading = ref(false)
-/** 发送中状态 (含 AI 思考阶段) */
-const sending = ref(false)
-
 /** 移动端侧边栏开关 */
 const mobileSidebarOpen = ref(false)
-
 /** 消息容器 DOM, 用于 nextTick 后再定位 scrollAnchor */
 const messagesContainerRef = ref(null)
 /** 消息列表底部的滚动锚点 */
 const scrollAnchorRef = ref(null)
 
-/** 当前激活的会话对象 (来自 conversations 列表) */
-const activeConversation = computed(() => {
-  if (!activeConversationId.value) return null
-  return conversations.value.find((c) => c.id === activeConversationId.value) || null
-})
-
+// ---- Computed ----
 /** 顶部标题: 有会话时显示其标题, 否则显示"新对话" */
 const currentTitle = computed(() => {
   return activeConversation.value?.title || DEFAULT_CONVERSATION_TITLE
@@ -276,10 +282,7 @@ const inputPlaceholder = computed(() => {
     : '向你的知识库提问...'
 })
 
-/**
- * 页面挂载时拉取会话列表
- * 失败时使用 toast.error 反馈, 但不阻塞后续交互
- */
+// ---- 生命周期 ----
 onMounted(async () => {
   await loadConversations()
   if (typeof window !== 'undefined') {
@@ -287,21 +290,15 @@ onMounted(async () => {
   }
 })
 
-/**
- * 页面卸载时清理 resize 监听
- */
 onBeforeUnmount(() => {
   if (typeof window !== 'undefined') {
     window.removeEventListener('resize', onResize)
   }
 })
 
-/**
- * 监听窗口尺寸变化: 在 >=md 时强制关闭移动菜单状态
- * 避免从桌面缩到移动端时, 侧边栏还停留在"打开"状态.
- *
- * @returns {void}
- */
+// ---- UI 事件处理 ----
+
+/** 窗口 resize 时, >=md 自动关闭移动端侧边栏 */
 function onResize() {
   if (typeof window === 'undefined') return
   if (window.innerWidth >= MD_BREAKPOINT_PX) {
@@ -309,33 +306,15 @@ function onResize() {
   }
 }
 
-/**
- * 切换移动端侧边栏
- * 仅在 <md 时由 NavBar 的汉堡按钮触发
- *
- * @returns {void}
- */
 function toggleMobileSidebar() {
   mobileSidebarOpen.value = !mobileSidebarOpen.value
 }
 
-/**
- * 关闭移动端侧边栏 (点击遮罩)
- *
- * @returns {void}
- */
 function closeMobileSidebar() {
   mobileSidebarOpen.value = false
 }
 
-/**
- * 滚动消息列表到底部
- * - 通过 nextTick 等待 DOM 更新完成
- * - 优先使用 scrollIntoView, 兼容性最好
- * - 失败 (容器尚未挂载) 时静默处理
- *
- * @returns {Promise<void>}
- */
+/** 滚动到消息底部 */
 async function scrollToBottom() {
   await nextTick()
   const anchor = scrollAnchorRef.value
@@ -344,193 +323,38 @@ async function scrollToBottom() {
   }
 }
 
-/**
- * 提取错误消息, 后端 ApiError / 普通 Error / 字符串均可处理
- *
- * @param {*} err - 任意异常
- * @param {string} fallback - 兜底文案
- * @returns {string} 错误描述
- */
-function getErrorMessage(err, fallback) {
-  return err?.message || fallback
-}
-
-/**
- * 加载会话列表
- * - 设置 conversationsLoading
- * - 失败时弹出错误 toast
- *
- * @returns {Promise<void>}
- */
-async function loadConversations() {
-  conversationsLoading.value = true
-  try {
-    const list = await listConversations()
-    conversations.value = Array.isArray(list) ? list : []
-  } catch (e) {
-    toast.error(`加载会话列表失败: ${getErrorMessage(e, '未知错误')}`)
-    conversations.value = []
-  } finally {
-    conversationsLoading.value = false
-  }
-}
-
-/**
- * 加载指定会话的消息列表
- *
- * @param {string} conversationId - 会话 ID
- * @returns {Promise<void>}
- */
-async function loadMessages(conversationId) {
-  messagesLoading.value = true
-  try {
-    const list = await getMessages(conversationId)
-    messages.value = Array.isArray(list) ? list : []
-    await scrollToBottom()
-  } catch (e) {
-    toast.error(`加载消息失败: ${getErrorMessage(e, '未知错误')}`)
-    messages.value = []
-  } finally {
-    messagesLoading.value = false
-  }
-}
-
-/**
- * 处理"新建会话"
- * 业务语义: 清空当前选择, 让用户输入第一条消息来触发 createConversation
- * 这里只重置 UI 状态, 不调用任何接口.
- *
- * @returns {void}
- */
+/** 新建会话: 重置 UI 状态 + 聚焦输入框 */
 function handleNewConversation() {
-  activeConversationId.value = null
-  messages.value = []
+  resetConversation()
   inputText.value = ''
   mobileSidebarOpen.value = false
+  chatInputRef.value?.focus()
 }
 
-/**
- * 处理"选择会话"
- *
- * @param {string} id - 会话 ID
- * @returns {Promise<void>}
- */
+/** 选中会话: 加载消息 + 滚动到底部 */
 async function handleSelectConversation(id) {
   if (!id || id === activeConversationId.value) return
-  activeConversationId.value = id
   mobileSidebarOpen.value = false
-  await loadMessages(id)
+  await selectConversation(id)
+  await scrollToBottom()
 }
 
-/**
- * 处理"删除会话"
- *
- * @param {string} id - 会话 ID
- * @returns {Promise<void>}
- */
+/** 删除会话 */
 async function handleDeleteConversation(id) {
-  try {
-    await deleteConversation(id)
-  } catch (e) {
-    toast.error(`删除会话失败: ${getErrorMessage(e, '未知错误')}`)
-    return
-  }
-  // 从本地列表中移除
-  const idx = conversations.value.findIndex((c) => c.id === id)
-  if (idx >= 0) {
-    conversations.value.splice(idx, 1)
-  }
-  // 如果删除的是当前激活会话, 清空右侧
-  if (activeConversationId.value === id) {
-    activeConversationId.value = null
-    messages.value = []
-  }
-  toast.success('会话已删除')
+  await deleteConversation(id)
 }
 
-/**
- * 在已有会话中追加一条用户消息
- *
- * @param {string} conversationId - 目标会话 ID
- * @param {string} text - 已 trim 的消息文本
- * @returns {Promise<void>}
- */
-async function appendMessageToConversation(conversationId, text) {
-  await addMessage(conversationId, text)
-  // 重新拉取消息以获取后端可能返回的最新状态
-  await loadMessages(conversationId)
-  // 刷新侧边栏以更新 last_msg_at / title 等
-  await loadConversations()
-}
-
-/**
- * 创建新会话并加载首轮消息
- *
- * @param {string} text - 已 trim 的消息文本
- * @returns {Promise<void>}
- */
-async function startNewConversation(text) {
-  const conv = await createConversation(text)
-  const newId = conv?.id
-  if (!newId) {
-    throw new Error('后端未返回会话 ID')
-  }
-  // 选中新会话
-  activeConversationId.value = newId
-  // 重新拉取该会话的消息 (含后端可能返回的 user + assistant 完整消息)
-  await loadMessages(newId)
-  // 刷新侧边栏列表 (后端可能会按时间排序)
-  await loadConversations()
-}
-
-/**
- * 处理"发送消息"
- * - 没有激活会话: 调 createConversation(text) 创建会话, 加载消息, 选中新会话
- * - 已有会话: 调 addMessage(conversationId, text) 追加消息
- * - 失败时回滚乐观追加的临时用户消息
- *
- * @param {string} query - 用户提交的查询文本 (已 trim)
- * @returns {Promise<void>}
- */
+/** 发送消息: 清空输入框 → 调 sendMessage → 滚动到底部 */
 async function handleSend(query) {
   const text = (query || '').trim()
   if (!text) return
-
-  // 立即将用户消息追加到本地 (乐观更新)
-  const tempUserMsg = {
-    id: `temp-user-${Date.now()}`,
-    role: 'user',
-    content: text,
-    created_at: new Date().toISOString(),
-  }
-  messages.value = [...messages.value, tempUserMsg]
   inputText.value = ''
-
-  sending.value = true
   await scrollToBottom()
-
-  try {
-    if (activeConversationId.value) {
-      await appendMessageToConversation(activeConversationId.value, text)
-    } else {
-      await startNewConversation(text)
-    }
-  } catch (e) {
-    toast.error(`发送失败: ${getErrorMessage(e, '未知错误')}`)
-    // 回滚本地乐观追加
-    messages.value = messages.value.filter((m) => m.id !== tempUserMsg.id)
-  } finally {
-    sending.value = false
-    await scrollToBottom()
-  }
+  await sendMessage(text)
+  await scrollToBottom()
 }
 
-/**
- * 处理"模型切换"
- *
- * @param {string} value - 新的模型标识
- * @returns {void}
- */
+/** 模型切换 */
 function handleModelChange(value) {
   if (value) {
     selectedModel.value = value
