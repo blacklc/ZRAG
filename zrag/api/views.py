@@ -63,8 +63,9 @@ class DocumentViewSet(viewsets.ViewSet):
         full = serializer.validated_data.get("full", False)
 
         if source_type is None:
-            # 未指定 source_type 时默认使用第一个注册的来源类型
             source_type = next(iter(SOURCE_REGISTRY))
+
+        logger.info("开始文档摄入 source_type=%s full=%s", source_type, full)
 
         source_cls = SOURCE_REGISTRY.get(source_type)
         if source_cls is None:
@@ -91,6 +92,11 @@ class DocumentViewSet(viewsets.ViewSet):
             chunker=chunker,
         )
         report = pipeline.run(source=source, full=full)
+        logger.info(
+            "文档摄入完成 source_type=%s total=%d new=%d updated=%d skipped=%d failed=%d",
+            source_type, report.total, report.new, report.updated,
+            report.skipped, report.failed,
+        )
 
         return APIResponse(
             data={
@@ -139,6 +145,7 @@ class DocumentViewSet(viewsets.ViewSet):
             for r in rows
         ]
 
+        logger.info("返回来源列表 count=%d", len(sources))
         return APIResponse(
             data={"sources": sources},
             message="success",
@@ -245,6 +252,7 @@ class ConversationViewSet(viewsets.ViewSet):
                    (SELECT MAX(m.created_at) FROM messages m WHERE m.conversation_id = c.id) AS last_msg_at
             FROM conversations c ORDER BY last_msg_at DESC
         """)
+        logger.debug("返回会话列表 count=%d", len(rows))
         return APIResponse(data={"total": len(rows), "conversations": rows})
 
     def get_messages(self, request, conversation_id=None):
@@ -270,6 +278,7 @@ class ConversationViewSet(viewsets.ViewSet):
             "SELECT id FROM conversations WHERE id = ?", (conversation_id,),
         )
         if conv is None:
+            logger.warning("会话不存在 conversation_id=%s", conversation_id)
             return APIResponse(
                 data=None,
                 message="conversation not found",
@@ -280,6 +289,7 @@ class ConversationViewSet(viewsets.ViewSet):
             "FROM messages WHERE conversation_id = ? ORDER BY created_at",
             (conversation_id,),
         )
+        logger.info("获取会话消息 conversation_id=%s count=%d", conversation_id, len(rows))
         return APIResponse(data={"conversation_id": conversation_id, "messages": rows})
 
     def destroy(self, request, conversation_id=None):
@@ -301,6 +311,7 @@ class ConversationViewSet(viewsets.ViewSet):
         with store.transaction() as db:
             db.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
             db.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+        logger.info("删除会话 conversation_id=%s", conversation_id)
         return APIResponse(data={"deleted": conversation_id})
 
     def create(self, request):
@@ -355,6 +366,10 @@ class ConversationViewSet(viewsets.ViewSet):
         reply = llm.chat(messages)
         if reply is None:
             raise LLMCallException("LLM returned no response")
+        logger.info(
+            "创建会话 conversation_id=%s query=%s results_count=%d reply_len=%d",
+            conversation_id, query[:50], len(results), len(reply),
+        )
 
         sources_json = json.dumps(
             [
@@ -478,6 +493,10 @@ class ConversationViewSet(viewsets.ViewSet):
         reply = llm.chat(full_messages)
         if reply is None:
             raise LLMCallException("LLM returned no response")
+        logger.info(
+            "追加消息 conversation_id=%s query=%s results_count=%d reply_len=%d",
+            conversation_id, query[:50], len(results), len(reply),
+        )
 
         sources_json = json.dumps(
             [
