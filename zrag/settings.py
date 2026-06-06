@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'corsheaders',
+    'drf_spectacular',
     'zrag',
 ]
 
@@ -47,7 +48,14 @@ REST_FRAMEWORK = {
     'UNAUTHENTICATED_USER': None,
     'DEFAULT_THROTTLE_CLASSES': [],
     'DEFAULT_THROTTLE_RATES': DEFAULT_THROTTLE_RATES,
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'EXCEPTION_HANDLER': 'zrag.api.exception_handler.api_exception_handler',
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'ZRAG API',
+    'DESCRIPTION': 'ZRAG 知识库 RAG 系统 API 文档',
+    'VERSION': '1.0.0',
 }
 
 ROOT_URLCONF = 'zrag.urls'
