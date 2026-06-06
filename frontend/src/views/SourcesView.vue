@@ -208,7 +208,7 @@ const lastReport = ref(null)
  */
 function normalizeSources(data) {
   if (Array.isArray(data)) return data
-  if (data && Array.isArray(data.items)) return data.items
+  if (data && Array.isArray(data.sources)) return data.sources
   return []
 }
 

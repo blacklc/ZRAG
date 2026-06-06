@@ -74,8 +74,8 @@ export function useChat() {
   async function loadConversations() {
     conversationsLoading.value = true
     try {
-      const list = await listConversations()
-      conversations.value = Array.isArray(list) ? list : []
+      const data = await listConversations()
+      conversations.value = data?.conversations || []
     } catch (e) {
       toast.error(`加载会话列表失败: ${getUserMessage(e)}`)
       conversations.value = []
@@ -93,9 +93,9 @@ export function useChat() {
   async function loadMessages(conversationId) {
     messagesLoading.value = true
     try {
-      const list = await getMessages(conversationId)
-      messages.value = Array.isArray(list) ? list : []
-      return list
+      const data = await getMessages(conversationId)
+      messages.value = data?.messages || []
+      return data
     } catch (e) {
       toast.error(`加载消息失败: ${getUserMessage(e)}`)
       messages.value = []
@@ -156,7 +156,7 @@ export function useChat() {
         await loadConversations()
       } else {
         const conv = await createConversation(text)
-        const newId = conv?.id
+        const newId = conv?.conversation_id
         if (!newId) {
           throw new Error('后端未返回会话 ID')
         }

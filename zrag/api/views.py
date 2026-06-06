@@ -75,14 +75,14 @@ class DocumentViewSet(viewsets.ViewSet):
                 request=request,
             )
 
-        from zrag.embed.local import BgeSmallEmbedder
+        from zrag.embed.local import get_embedder
         from zrag.ingest.chunking.registry import get_chunker
-        from zrag.store.vector_store import ChromaStore
+        from zrag.store.vector_store import get_chroma_store
 
         source = source_cls()
         store = SQLiteStore()
-        chroma_store = ChromaStore()
-        embedder = BgeSmallEmbedder()
+        chroma_store = get_chroma_store()
+        embedder = get_embedder()
         chunker = get_chunker(source_type)
         pipeline = IngestionPipeline(
             sqlite_store=store,
