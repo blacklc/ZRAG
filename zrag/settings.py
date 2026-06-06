@@ -54,8 +54,21 @@ REST_FRAMEWORK = {
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'ZRAG API',
-    'DESCRIPTION': 'ZRAG 知识库 RAG 系统 API 文档',
+    'DESCRIPTION': 'ZRAG 知识库 RAG 系统 API 文档。所有 API（除健康检查）需要 Bearer Token 认证。',
     'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+    'SECURITY': [{'bearerAuth': []}],
+    'APPEND_COMPONENTS': {
+        'securitySchemes': {
+            'bearerAuth': {
+                'type': 'http',
+                'scheme': 'bearer',
+                'bearerFormat': 'API Key',
+                'description': '输入 API Key',
+            },
+        },
+    },
 }
 
 ROOT_URLCONF = 'zrag.urls'

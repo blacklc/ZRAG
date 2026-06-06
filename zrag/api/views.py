@@ -7,12 +7,14 @@ import json
 import logging
 import uuid
 
+from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import viewsets
 
 from zrag.api.auth import APIKeyAuthentication
 from zrag.api.exceptions import LLMCallException, NotFoundException
 from zrag.api.response import APIResponse
 from zrag.api.serializers import ConversationQuerySerializer, IngestSerializer
+from zrag.api import schema_serializers as ss
 from zrag.api.throttles import ChatRateThrottle, IngestRateThrottle
 from zrag.ingest.pipeline import IngestionPipeline
 from zrag.ingest.sources import SOURCE_REGISTRY
@@ -41,6 +43,16 @@ class DocumentViewSet(viewsets.ViewSet):
     authentication_classes = [APIKeyAuthentication]
     throttle_classes = [IngestRateThrottle]
 
+    @extend_schema(
+        summary="执行文档摄入",
+        description="对指定来源类型执行全量或增量文档摄入，返回摄入报告。",
+        request=IngestSerializer,
+        responses={
+            200: OpenApiResponse(response=ss.IngestionReportSerializer, description="摄入完成"),
+            400: OpenApiResponse(response=ss.ErrorResponseSerializer, description="参数错误或来源类型无效"),
+            401: OpenApiResponse(response=ss.ErrorResponseSerializer, description="认证失败"),
+        },
+    )
     def ingest(self, request):
         """执行文档摄入
 
@@ -126,6 +138,14 @@ class DocumentViewSet(viewsets.ViewSet):
             request=request,
         )
 
+    @extend_schema(
+        summary="获取知识库来源列表",
+        description="查询 processed_docs 表，按 source_type 分组统计文档数量和最后摄入时间。",
+        responses={
+            200: OpenApiResponse(response=ss.SourceListResponseSerializer, description="成功"),
+            401: OpenApiResponse(response=ss.ErrorResponseSerializer, description="认证失败"),
+        },
+    )
     def list_sources(self, request):
         """查询文档来源列表
 
@@ -245,6 +265,14 @@ class ConversationViewSet(viewsets.ViewSet):
         self.llm_provider = LLMGatewayProvider()
         return self.llm_provider
 
+    @extend_schema(
+        summary="获取会话列表",
+        description="查询所有会话记录，按最近消息时间倒序排列。返回会话总数和各会话的基本信息。",
+        responses={
+            200: OpenApiResponse(response=ss.ConversationListResponseSerializer, description="成功"),
+            401: OpenApiResponse(response=ss.ErrorResponseSerializer, description="认证失败"),
+        },
+    )
     def list(self, request):
         """获取会话列表 (切片 28)
 
@@ -268,6 +296,15 @@ class ConversationViewSet(viewsets.ViewSet):
         logger.debug("[req=%s] 会话列表已查询 count=%d", req_id, len(rows))
         return APIResponse(data={"total": len(rows), "conversations": rows})
 
+    @extend_schema(
+        summary="获取会话消息列表",
+        description="查询指定会话的所有消息，按创建时间正序排列。若会话不存在返回 404。",
+        responses={
+            200: OpenApiResponse(response=ss.MessageListResponseSerializer, description="成功"),
+            401: OpenApiResponse(response=ss.ErrorResponseSerializer, description="认证失败"),
+            404: OpenApiResponse(response=ss.ErrorResponseSerializer, description="会话不存在"),
+        },
+    )
     def get_messages(self, request, conversation_id=None):
         """获取指定会话的消息列表 (切片 29)
 
@@ -306,6 +343,14 @@ class ConversationViewSet(viewsets.ViewSet):
         logger.info("[req=%s] 消息列表已查询 conversation_id=%s count=%d", req_id, conversation_id, len(rows))
         return APIResponse(data={"conversation_id": conversation_id, "messages": rows})
 
+    @extend_schema(
+        summary="删除会话",
+        description="删除指定会话及其所有消息。若会话不存在仍返回成功（幂等）。",
+        responses={
+            200: OpenApiResponse(response=ss.DeleteConversationResponseSerializer, description="删除成功"),
+            401: OpenApiResponse(response=ss.ErrorResponseSerializer, description="认证失败"),
+        },
+    )
     def destroy(self, request, conversation_id=None):
         """删除指定会话及其所有消息 (切片 30, 幂等)
 
@@ -329,6 +374,23 @@ class ConversationViewSet(viewsets.ViewSet):
         logger.info("[req=%s] 会话已删除 conversation_id=%s", req_id, conversation_id)
         return APIResponse(data={"deleted": conversation_id})
 
+    @extend_schema(
+        summary="创建会话并执行 RAG 问答",
+        description=(
+            "创建新会话并执行首轮 RAG 问答。流程：\n"
+            "1. 校验 query 参数\n2. 写入 conversations 记录\n"
+            "3. hybrid_search 知识库检索\n4. build_rag_prompt 构建消息\n"
+            "5. LLM 调用获取回复\n6. 写入 user/assistant 消息\n7. 返回会话及回复"
+        ),
+        request=ConversationQuerySerializer,
+        responses={
+            201: OpenApiResponse(response=ss.CreateConversationResponseSerializer, description="创建成功"),
+            400: OpenApiResponse(response=ss.ErrorResponseSerializer, description="参数校验失败"),
+            401: OpenApiResponse(response=ss.ErrorResponseSerializer, description="认证失败"),
+            429: OpenApiResponse(response=ss.ErrorResponseSerializer, description="请求过于频繁"),
+            502: OpenApiResponse(response=ss.ErrorResponseSerializer, description="LLM 调用失败"),
+        },
+    )
     def create(self, request):
         """创建新会话并执行 RAG 问答 (切片 26)
 
@@ -441,6 +503,23 @@ class ConversationViewSet(viewsets.ViewSet):
             request=request,
         )
 
+    @extend_schema(
+        summary="在已有会话中追加消息",
+        description=(
+            "在已有会话中追加问题并执行 RAG 问答。流程：\n"
+            "1. 校验会话存在\n2. 加载最近 10 条历史消息\n"
+            "3. hybrid_search 检索\n4. 构建含历史的消息列表\n"
+            "5. LLM 调用\n6. 写入消息\n7. 返回回复"
+        ),
+        request=ConversationQuerySerializer,
+        responses={
+            201: OpenApiResponse(response=ss.AddMessageResponseSerializer, description="追加成功"),
+            400: OpenApiResponse(response=ss.ErrorResponseSerializer, description="参数校验失败"),
+            401: OpenApiResponse(response=ss.ErrorResponseSerializer, description="认证失败"),
+            404: OpenApiResponse(response=ss.ErrorResponseSerializer, description="会话不存在"),
+            502: OpenApiResponse(response=ss.ErrorResponseSerializer, description="LLM 调用失败"),
+        },
+    )
     def add_message(self, request, conversation_id=None):
         """在已有会话中追加消息并执行 RAG 问答 (切片 27)
 
