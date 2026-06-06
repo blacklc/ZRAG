@@ -22,6 +22,11 @@ from zrag.store.sqlite_store import SQLiteStore, get_sqlite_store
 logger = logging.getLogger(__name__)
 
 
+def _get_request_id(request):
+    """从 request 中提取 X-Request-ID"""
+    return getattr(request, 'META', {}).get("X-Request-ID", "-")
+
+
 class DocumentViewSet(viewsets.ViewSet):
     """文档管理视图集
 
@@ -65,7 +70,8 @@ class DocumentViewSet(viewsets.ViewSet):
         if source_type is None:
             source_type = next(iter(SOURCE_REGISTRY))
 
-        logger.info("开始文档摄入 source_type=%s full=%s", source_type, full)
+        req_id = _get_request_id(request)
+        logger.info("[req=%s] 开始文档摄入 source_type=%s full=%s", req_id, source_type, full)
 
         source_cls = SOURCE_REGISTRY.get(source_type)
         if source_cls is None:
@@ -91,10 +97,15 @@ class DocumentViewSet(viewsets.ViewSet):
             embedder=embedder,
             chunker=chunker,
         )
-        report = pipeline.run(source=source, full=full)
+        logger.info("[req=%s] Pipeline 已初始化 source_type=%s", req_id, source_type)
+        try:
+            report = pipeline.run(source=source, full=full)
+        except Exception:
+            logger.exception("[req=%s] 摄入失败 source_type=%s", req_id, source_type)
+            raise
         logger.info(
-            "文档摄入完成 source_type=%s total=%d new=%d updated=%d skipped=%d failed=%d",
-            source_type, report.total, report.new, report.updated,
+            "[req=%s] 摄入完成 source_type=%s total=%d new=%d updated=%d skipped=%d failed=%d",
+            req_id, source_type, report.total, report.new, report.updated,
             report.skipped, report.failed,
         )
 
@@ -145,7 +156,8 @@ class DocumentViewSet(viewsets.ViewSet):
             for r in rows
         ]
 
-        logger.info("返回来源列表 count=%d", len(sources))
+        req_id = _get_request_id(request)
+        logger.info("[req=%s] 来源列表已查询 count=%d", req_id, len(sources))
         return APIResponse(
             data={"sources": sources},
             message="success",
@@ -252,7 +264,8 @@ class ConversationViewSet(viewsets.ViewSet):
                    (SELECT MAX(m.created_at) FROM messages m WHERE m.conversation_id = c.id) AS last_msg_at
             FROM conversations c ORDER BY last_msg_at DESC
         """)
-        logger.debug("返回会话列表 count=%d", len(rows))
+        req_id = _get_request_id(request)
+        logger.debug("[req=%s] 会话列表已查询 count=%d", req_id, len(rows))
         return APIResponse(data={"total": len(rows), "conversations": rows})
 
     def get_messages(self, request, conversation_id=None):
@@ -277,8 +290,9 @@ class ConversationViewSet(viewsets.ViewSet):
         conv = store.fetch_one(
             "SELECT id FROM conversations WHERE id = ?", (conversation_id,),
         )
+        req_id = _get_request_id(request)
         if conv is None:
-            logger.warning("会话不存在 conversation_id=%s", conversation_id)
+            logger.warning("[req=%s] 会话不存在 conversation_id=%s", req_id, conversation_id)
             return APIResponse(
                 data=None,
                 message="conversation not found",
@@ -289,7 +303,7 @@ class ConversationViewSet(viewsets.ViewSet):
             "FROM messages WHERE conversation_id = ? ORDER BY created_at",
             (conversation_id,),
         )
-        logger.info("获取会话消息 conversation_id=%s count=%d", conversation_id, len(rows))
+        logger.info("[req=%s] 消息列表已查询 conversation_id=%s count=%d", req_id, conversation_id, len(rows))
         return APIResponse(data={"conversation_id": conversation_id, "messages": rows})
 
     def destroy(self, request, conversation_id=None):
@@ -311,7 +325,8 @@ class ConversationViewSet(viewsets.ViewSet):
         with store.transaction() as db:
             db.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
             db.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
-        logger.info("删除会话 conversation_id=%s", conversation_id)
+        req_id = _get_request_id(request)
+        logger.info("[req=%s] 会话已删除 conversation_id=%s", req_id, conversation_id)
         return APIResponse(data={"deleted": conversation_id})
 
     def create(self, request):
@@ -344,6 +359,7 @@ class ConversationViewSet(viewsets.ViewSet):
                        "content": str, "sources": list[dict] } }
         @rtype:  APIResponse
         """
+        req_id = _get_request_id(request)
         serializer = ConversationQuerySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         query = serializer.validated_data["query"]
@@ -359,6 +375,7 @@ class ConversationViewSet(viewsets.ViewSet):
 
         retriever = self._get_retriever()
         results = retriever.hybrid_search(query, k=10)
+        logger.info("[req=%s] 检索完成 conversation_id=%s results_count=%d", req_id, conversation_id, len(results))
 
         messages = build_rag_prompt(query, results)
 
@@ -366,10 +383,7 @@ class ConversationViewSet(viewsets.ViewSet):
         reply = llm.chat(messages)
         if reply is None:
             raise LLMCallException("LLM returned no response")
-        logger.info(
-            "创建会话 conversation_id=%s query=%s results_count=%d reply_len=%d",
-            conversation_id, query[:50], len(results), len(reply),
-        )
+        logger.info("[req=%s] LLM 调用完成 conversation_id=%s reply_len=%d", req_id, conversation_id, len(reply))
 
         sources_json = json.dumps(
             [
@@ -397,6 +411,7 @@ class ConversationViewSet(viewsets.ViewSet):
             "VALUES (?, ?, ?, ?, ?)",
             (assistant_msg_id, conversation_id, "assistant", reply, sources_json),
         )
+        logger.info("[req=%s] 消息已保存 conversation_id=%s", req_id, conversation_id)
 
         return APIResponse(
             data={
@@ -459,6 +474,7 @@ class ConversationViewSet(viewsets.ViewSet):
                        "content": str, "sources": list[dict] } }
         @rtype:  APIResponse
         """
+        req_id = _get_request_id(request)
         serializer = ConversationQuerySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         query = serializer.validated_data["query"]
@@ -470,16 +486,17 @@ class ConversationViewSet(viewsets.ViewSet):
         if conv is None:
             raise NotFoundException(f"Conversation {conversation_id} not found")
 
-        # 获取最近 10 条消息作为历史上下文, 按时间正序排列
         history_rows = store.fetch_all(
             "SELECT role, content FROM messages "
             "WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 10",
             (conversation_id,),
         )
         history = list(reversed(history_rows))
+        logger.info("[req=%s] 历史消息已加载 conversation_id=%s history_count=%d", req_id, conversation_id, len(history))
 
         retriever = self._get_retriever()
         results = retriever.hybrid_search(query, k=10)
+        logger.info("[req=%s] 检索完成 conversation_id=%s results_count=%d", req_id, conversation_id, len(results))
 
         rag_messages = build_rag_prompt(query, results)
         system_msg = rag_messages[0]
@@ -493,10 +510,7 @@ class ConversationViewSet(viewsets.ViewSet):
         reply = llm.chat(full_messages)
         if reply is None:
             raise LLMCallException("LLM returned no response")
-        logger.info(
-            "追加消息 conversation_id=%s query=%s results_count=%d reply_len=%d",
-            conversation_id, query[:50], len(results), len(reply),
-        )
+        logger.info("[req=%s] LLM 调用完成 conversation_id=%s reply_len=%d", req_id, conversation_id, len(reply))
 
         sources_json = json.dumps(
             [
@@ -524,6 +538,7 @@ class ConversationViewSet(viewsets.ViewSet):
             "VALUES (?, ?, ?, ?, ?)",
             (assistant_msg_id, conversation_id, "assistant", reply, sources_json),
         )
+        logger.info("[req=%s] 消息已保存 conversation_id=%s", req_id, conversation_id)
 
         return APIResponse(
             data={

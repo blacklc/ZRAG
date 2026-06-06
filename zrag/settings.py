@@ -33,6 +33,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
+    'zrag.api.middleware.RequestIDMiddleware',
 ]
 
 CORS_ALLOW_ALL_ORIGINS = True   # Phase 1 开发阶段

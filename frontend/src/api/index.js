@@ -28,11 +28,12 @@ export class ApiError extends Error {
    * @param {string} errorCode - 后端约定的错误码
    * @param {number} status - HTTP 状态码
    */
-  constructor(message, errorCode, status) {
+  constructor(message, errorCode, status, requestId = '') {
     super(message)
     this.name = 'ApiError'
     this.errorCode = errorCode
     this.status = status
+    this.requestId = requestId
   }
 }
 
@@ -93,12 +94,14 @@ async function request(method, path, body) {
   clearTimeout(timeoutId)
 
   const data = await parseJsonResponse(response)
+  const requestId = response.headers.get('X-Request-ID') || data?.RequestID || ''
 
   if (!response.ok) {
     throw new ApiError(
       data?.Message || `HTTP ${response.status}`,
       data?.ErrorCode || 'HTTP-ERROR',
       response.status,
+      requestId,
     )
   }
   return data?.Data ?? null
@@ -140,8 +143,10 @@ export function getUserMessage(error) {
   if (status === 429) return '请求过于频繁，请稍后重试'
   if (status >= 500) return '服务器内部错误，请稍后重试'
 
-  // 兜底: 返回原始 message
-  return error?.message || '未知错误'
+  // 兜底: 返回原始 message，末尾追加 Trace ID
+  const base = error?.message || '未知错误'
+  const suffix = error?.requestId ? ` (错误ID: ${error.requestId})` : ''
+  return base + suffix
 }
 
 /**

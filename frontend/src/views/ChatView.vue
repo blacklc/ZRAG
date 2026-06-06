@@ -90,7 +90,7 @@
           <div class="max-w-3xl mx-auto space-y-3 sm:space-y-4">
             <!-- 空状态: 无激活会话且未发送 -->
             <div
-              v-if="!activeConversationId && !sending"
+              v-if="!activeConversationId && !sending && messages.length === 0"
               class="h-full flex flex-col items-center justify-center text-center px-4"
               data-testid="chat-empty"
             >
