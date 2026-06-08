@@ -26,6 +26,8 @@ services:
       dockerfile: Dockerfile.frontend
       args:
         VITE_API_KEY: ${ZRAG_API_KEY}
+    volumes:
+      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     expose:
       - "80"
     environment:
