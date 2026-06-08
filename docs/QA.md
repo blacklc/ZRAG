@@ -2787,3 +2787,53 @@ $ curl -s -o /dev/null -w "%{http_code}" http://localhost/zrag/v1/health/live
 **验证结果**: 容器启动后 `/app/log/` 下 4 个文件全部创建。`debug.log` 包含 chromadb 初始化 DEBUG 日志，其余文件初始为空。
 
 **镜像体积注意**: 本次构建耗时约 18 分钟（torch 532MB + nvidia 系列 CUDA 包 ~2GB），镜像较大。CPU-only 部署场景可后续改为 CPU-only torch（`--index-url https://download.pytorch.org/whl/cpu`）以减少约 2GB 体积。
+
+---
+
+## Q37: Prompt 模板引擎选型
+
+**日期**: 2026-06-08
+
+**用户**: prompt 模版定义在何处？推荐一种常用的模版形式。
+
+**分析**:
+- 当前 SYSTEM_PROMPT 硬编码在 `zrag/retrieval/prompt_builder.py` 中，使用 Python 字符串拼接
+- 业界主流方案是 Jinja2：LangChain、LlamaIndex、vLLM 的 chat template 均基于 Jinja2
+- Jinja2 支持条件渲染、循环、过滤器，可读性和可维护性远优于字符串拼接
+- 将模板文件独立存放，方便非开发人员调试和调整 prompt
+
+**决策**: 采用 **Jinja2** 作为 prompt 模板引擎
+
+**实现**:
+```
+zrag/prompts/
+└── chat_system.j2          # 系统提示词模板
+
+zrag/retrieval/prompt_builder.py  # 改为 FileSystemLoader + template.render()
+```
+
+**模板内容** (`chat_system.j2`):
+```jinja2
+你是一个个人知识库助手。请基于以下参考材料回答用户问题。
+如果参考材料中没有相关信息，请如实告知。
+
+参考材料:
+{% if reference_materials -%}
+{% for doc in reference_materials -%}
+[来源: {{ doc.doc_title }}]
+{{ doc.content }}
+
+{% if not loop.last -%}
+---
+{% endif %}
+{%- endfor %}
+{%- else -%}
+（暂无参考材料）
+{%- endif %}
+```
+
+**关键点**:
+- `reference_materials` 传入检索结果列表，每条含 `doc_title` 和 `content`
+- 无结果时显示「暂无参考材料」，LLM 知晓知识库为空
+- 多条记录间用 `---` 分隔
+- Jinja2 随 Django 内置可用，无需额外安装

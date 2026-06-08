@@ -243,3 +243,4 @@ CREATE TABLE messages (id TEXT PK, conversation_id TEXT FK, role TEXT, content T
 - 整个项目在同一 Git 仓库中（zrag/ 后端 + frontend/ 前端）
 - 全部模块设计方案及各模块代码片段记录于 docs/QA.md（Q0-Q35）
 - 全程无 LangChain/LlamaIndex/FastAPI/手写 BM25/Jinja2 服务端渲染
+- Prompt 模板引擎：Jinja2（zrag/prompts/chat_system.j2），支持条件渲染和格式化
