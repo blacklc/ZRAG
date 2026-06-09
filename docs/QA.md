@@ -2837,3 +2837,401 @@ zrag/retrieval/prompt_builder.py  # 改为 FileSystemLoader + template.render()
 - 无结果时显示「暂无参考材料」，LLM 知晓知识库为空
 - 多条记录间用 `---` 分隔
 - Jinja2 随 Django 内置可用，无需额外安装
+
+---
+
+## Q38: macOS Notes 全量/增量导入异步方案
+
+**日期**: 2026-06-08 至 2026-06-09
+
+**用户**: 测试全量导入功能时报`FileNotFoundError: osascript`。macOS Notes 数据源需在容器外获取，但触发必须来自 Web UI。
+
+### 38.1 方案选型
+
+经过多轮讨论，最终确定**宿主导出 + 文件桥接 + DB 任务管理**方案：
+
+**核心约束**:
+- 导出触发来自操作页面（容器内），不能脱离系统
+- 容器与宿主机交互全部通过文件（共享 volume）
+- 导出脚本由用户手动在宿主机终端执行
+- 摄入流程异步化，支持实时进度和取消
+
+**架构**:
+```
+浏览器 → POST /v1/documents/ingest → 202 {task_id}
+  → 后端创建 task + 写入 manifest.json
+  → 前端弹窗 "请在终端执行 python3 zrag/export_notes.py"
+  → 用户执行导出脚本
+  → MacNotesSource 轮询 result.json
+  → Pipeline 逐篇处理 → task DONE → 清理线程删除 export 目录
+```
+
+### 38.2 数据传递流程
+
+```
+data/pro/export/<task_id>/
+  ├── manifest.json         # 后端写入 {task_id,task_type,source_type,processed_docs[]}
+  ├── result.json           # 导出脚本写入 {"status":"ok","total":3699}
+  └── <note_id>.json        # 单条笔记 {id,name,folder,content}
+```
+
+- 增量模式: manifest.json 中含 processed_docs，导出脚本对比 hash 只导出变更
+- 全量模式: processed_docs 为空
+
+### 38.3 任务抽象
+
+**TaskStatus**:
+```python
+PENDING     # 已提交，等待线程池调度
+EXPORTING   # 等待宿主机导出文件就绪（mac_notes 专用）
+INGESTING   # Pipeline 逐篇 chunk→embed→store
+DONE        # 全部完成
+CANCELLED   # 用户手动取消
+ERROR       # 异常终止
+```
+
+**DB 表 ingest_tasks**: id, task_type, status, total, processed, created_at, updated_at
+
+**IngestTask**（内存对象）: 与 DB 表字段一一对应
+
+### 38.4 TaskManager — 线程池 + 取消机制
+
+- 线程池: `ThreadPoolExecutor(max_workers=2)` 定义在 settings.py `ZRAG_INGEST_EXECUTOR`，注入 TaskManager
+- 配置: `config/ingest.yaml` → `task_pool_size: 2`
+- 取消: `threading.Event` 纳秒级检查，每篇文档处理前 `is_set()`；DB 双写兜底
+
+### 38.5 Pipeline 改动
+
+- `all_docs = []` 移除，改为逐篇 `for doc in source.fetch_batch()`
+- 每篇前检查取消信号
+- 每篇后更新 task.processed
+- 完成后清理线程删除 `data/pro/export/<task_id>/`
+
+### 38.6 MacNotesSource 改动
+
+- 原有 `osascript` 子进程调用移除
+- `fetch_batch()` 改为轮询 `result.json`（2s 间隔），阻塞等待导出完成
+- 逐个读取 JSON 文件 yield RawDocument
+- `_html_to_markdown()` 移除（导出脚本直接导出 Markdown）
+
+### 38.7 前端交互
+
+- SourcesView 新增数据源下拉选择
+- 点击后 → 202 → 弹窗提示终端命令
+- 轮询 `GET /v1/ingest/{task_id}/status` → 显示进度条 "128/3699"
+- 支持取消按钮 → `POST /v1/ingest/{id}/cancel`
+
+### 38.8 新 API 端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/v1/documents/ingest` | 改为异步，返回 202 + task_id |
+| GET | `/v1/ingest/{id}/status` | 查询任务进度 |
+| POST | `/v1/ingest/{id}/cancel` | 取消任务 |
+
+### 38.9 关键文件
+
+| 文件 | 变更 |
+|------|------|
+| `zrag/export_notes.py` | 新增，宿主机导出脚本 |
+| `zrag/api/task_manager.py` | 新增，TaskManager + IngestTask + TaskStatus |
+| `zrag/api/views.py` | ingest 异步化 + status/cancel 端点 |
+| `zrag/api/urls.py` | 新增路由 |
+| `zrag/ingest/pipeline.py` | 逐篇处理 + task 支持 |
+| `zrag/ingest/sources/mac_notes.py` | 文件桥接模式 |
+| `zrag/store/sqlite_store.py` | init_ingest_tasks 建表 |
+| `zrag/settings.py` | ZRAG_INGEST_EXECUTOR |
+| `config/ingest.yaml` | task_pool_size |
+| `frontend/src/views/SourcesView.vue` | 数据源选择 + 进度轮询 |
+
+### 38.10 核心代码实现
+
+#### TaskStatus + IngestTask + TaskManager
+
+```python
+# zrag/api/task_manager.py
+import uuid
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from enum import Enum
+
+from django.conf import settings
+
+
+class TaskStatus(str, Enum):
+    PENDING = "pending"          # 已提交，等待线程池调度
+    EXPORTING = "exporting"      # 等待宿主机导出文件就绪（mac_notes 专用）
+    INGESTING = "ingesting"      # Pipeline 逐篇 chunk → embed → store 处理中
+    DONE = "done"                # 全部完成
+    CANCELLED = "cancelled"      # 用户手动取消
+    ERROR = "error"              # 异常终止
+
+
+@dataclass
+class IngestTask:
+    id: str                      # UUID
+    task_type: str               # 'full' | 'incr'
+    status: TaskStatus           # 当前状态
+    total: int                   # 文档总数
+    processed: int               # 已处理数
+    created_at: str              # ISO 8601
+    updated_at: str              # ISO 8601
+
+    @classmethod
+    def create(cls, task_type: str) -> "IngestTask":
+        from datetime import datetime
+        now = datetime.utcnow().isoformat()
+        return cls(
+            id=str(uuid.uuid4()),
+            task_type=task_type,
+            status=TaskStatus.PENDING,
+            total=0, processed=0,
+            created_at=now, updated_at=now,
+        )
+
+
+class TaskManager:
+    """摄入任务管理器（模块级单例）
+
+    线程池由 settings.ZRAG_INGEST_EXECUTOR 注入。
+    取消机制：threading.Event（纳秒级检查） + DB UPDATE 兜底。
+    """
+
+    def __init__(self, executor: ThreadPoolExecutor):
+        self._executor = executor
+        self._events: dict[str, threading.Event] = {}
+
+    @classmethod
+    def get_instance(cls) -> "TaskManager":
+        if not hasattr(cls, "_instance"):
+            cls._instance = cls(executor=settings.ZRAG_INGEST_EXECUTOR)
+        return cls._instance
+
+    def submit(self, task: IngestTask, fn) -> None:
+        self._events[task.id] = threading.Event()
+        self._executor.submit(fn, task)
+
+    def cancel(self, task_id: str) -> None:
+        if task_id in self._events:
+            self._events[task_id].set()
+
+    def is_cancelled(self, task_id: str) -> bool:
+        return self._events.get(task_id, threading.Event()).is_set()
+```
+
+#### settings.py 线程池配置
+
+```python
+# zrag/settings.py
+from concurrent.futures import ThreadPoolExecutor
+
+_ingest_cfg = _config.get("ingest", {})
+ZRAG_INGEST = _ingest_cfg
+ZRAG_INGEST_EXECUTOR = ThreadPoolExecutor(
+    max_workers=_ingest_cfg.get("task_pool_size", 2),
+    thread_name_prefix="ingest-",
+)
+```
+
+#### config/ingest.yaml
+
+```yaml
+ingest:
+  batch_size: 5
+  task_pool_size: 2
+```
+
+#### DB 建表
+
+```sql
+CREATE TABLE IF NOT EXISTS ingest_tasks (
+    id            TEXT PRIMARY KEY,
+    task_type     TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    total         INTEGER DEFAULT 0,
+    processed     INTEGER DEFAULT 0,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+#### MacNotesSource 新版
+
+```python
+# zrag/ingest/sources/mac_notes.py — 文件桥接模式
+import json
+import os
+import time
+from pathlib import Path
+from typing import Iterator
+
+from zrag.ingest.sources.base import DocumentSource
+from zrag.models.document import RawDocument
+
+EXPORT_BASE_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "data", "pro", "export"
+)
+
+
+class MacNotesSource(DocumentSource):
+    """macOS 备忘录数据源（文件桥接模式）"""
+
+    def __init__(self, task_id: str):
+        self._task_id = task_id
+        self._export_dir = os.path.join(EXPORT_BASE_DIR, task_id)
+        self._total = 0
+
+    @property
+    def source_type(self) -> str:
+        return "mac_notes"
+
+    def total_count(self) -> int:
+        return self._total
+
+    def fetch_batch(self, batch_size: int = 1) -> Iterator[RawDocument]:
+        # 阶段 1: 轮询 result.json
+        result_file = os.path.join(self._export_dir, "result.json")
+        while not os.path.exists(result_file):
+            time.sleep(2)
+
+        with open(result_file) as f:
+            result = json.load(f)
+        if result.get("status") != "ok":
+            raise RuntimeError(f"导出失败: {result.get('message', '')}")
+
+        self._total = result["total"]
+
+        # 阶段 2: 逐篇 yield
+        for filepath in sorted(Path(self._export_dir).glob("*.json")):
+            if filepath.name == "result.json":
+                continue
+            with open(filepath) as f:
+                note = json.load(f)
+            yield RawDocument(
+                source_id=note["id"],
+                source_type=self.source_type,
+                content=note["content"],
+                content_hash="",  # Pipeline 填入
+                metadata={
+                    "folder": note.get("folder", ""),
+                    "name": note.get("name", ""),
+                },
+            )
+```
+
+#### IngestionPipeline 新版（关键改动）
+
+```python
+# zrag/ingest/pipeline.py — 逐篇处理 + task 支持
+
+def run(
+    self,
+    source: DocumentSource,
+    full: bool = False,
+    task: IngestTask | None = None,
+) -> IngestReport:
+    from zrag.api.task_manager import TaskManager
+
+    report = IngestReport()
+
+    for doc in source.fetch_batch(batch_size=1):
+
+        # 取消检测
+        if task and TaskManager.get_instance().is_cancelled(task.id):
+            break
+
+        # 增量判断
+        if not full:
+            existing = self.sqlite_store.get_processed(doc.source_id)
+            if existing and existing["content_hash"] == doc.content_hash:
+                report.skipped += 1
+                if task:
+                    task.processed += 1
+                continue
+        report.total += 1
+
+        # 处理
+        try:
+            chunks = self.chunker.chunk(doc)
+            vectors = self.embedder.embed([c.content for c in chunks])
+
+            with self.sqlite_store.transaction():
+                self.sqlite_store.delete_by_source(doc.source_id)
+                self.sqlite_store.add_chunks(chunks)
+
+            self.chroma_store.delete_by_source(doc.source_id)
+            self.chroma_store.add(
+                ids=[c.chunk_id for c in chunks],
+                embeddings=vectors,
+                metadatas=[{
+                    "source_id": c.source_id, "source_type": c.source_type,
+                    "doc_title": c.doc_title, "chunk_index": c.chunk_index,
+                } for c in chunks],
+            )
+
+            self.sqlite_store.upsert_processed(doc)
+            report.new += 1
+
+        except Exception as e:
+            logger.exception("文档 %s 处理失败", doc.source_id)
+            report.failed += 1
+
+        if task:
+            task.processed += 1
+
+    return report
+```
+
+#### 异步摄入执行函数
+
+```python
+# zrag/api/task_manager.py (补充)
+import shutil
+
+def _run_ingest_task(task: IngestTask, source_type: str, full: bool):
+    """在线程池中执行的摄入任务"""
+    task.status = TaskStatus.EXPORTING
+    export_dir = f"data/pro/export/{task.id}"
+
+    if source_type == "mac_notes":
+        source = MacNotesSource(task_id=task.id)
+    else:
+        # 其他 source 直接创建，跳过 EXPORTING
+        pass
+
+    task.status = TaskStatus.INGESTING
+    pipeline = IngestionPipeline(...)
+    try:
+        report = pipeline.run(source=source, full=full, task=task)
+        task.status = TaskStatus.DONE
+    except Exception:
+        task.status = TaskStatus.ERROR
+
+    # 清理（独立线程）
+    if os.path.exists(export_dir):
+        threading.Thread(target=lambda: shutil.rmtree(export_dir)).start()
+```
+
+#### 导出脚本 manifest.json 格式
+
+```json
+{
+    "task_id": "abc123-def456",
+    "source_type": "mac_notes",
+    "task_type": "incr",
+    "exported_at": "2026-06-09T10:00:00",
+    "processed_docs": [
+        {"source_id": "xxx", "content_hash": "abc...", "imported_at": "..."}
+    ]
+}
+```
+
+#### 数据目录结构
+
+```
+data/pro/export/<task_id>/
+  ├── manifest.json         # 后端写入
+  ├── result.json           # 导出脚本写入 {"status":"ok","total":128}
+  └── <note_id>.json        # 单条笔记 {"id","name","folder","content"}
+```
