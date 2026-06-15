@@ -90,3 +90,25 @@ class SourceSummarySerializer(serializers.Serializer):
 
 class SourceListResponseSerializer(serializers.Serializer):
     sources = SourceSummarySerializer(many=True)
+
+
+# ---- 摄入任务 ----
+class AvailableSourcesResponseSerializer(serializers.Serializer):
+    sources = serializers.ListField(
+        child=serializers.CharField(), help_text="已注册的数据源类型列表"
+    )
+
+
+class TaskCreateResponseSerializer(serializers.Serializer):
+    task_id = serializers.CharField(help_text="任务 ID")
+    status = serializers.CharField(help_text="任务状态")
+
+
+class TaskStatusResponseSerializer(serializers.Serializer):
+    task_id = serializers.CharField(help_text="任务 ID")
+    task_type = serializers.CharField(help_text="任务类型: full | incremental")
+    status = serializers.CharField(help_text="任务状态: pending | waiting | processing | done | cancelled | failed")
+    total = serializers.IntegerField(help_text="文档总数")
+    processed = serializers.IntegerField(help_text="已处理数")
+    created_at = serializers.CharField(help_text="创建时间")
+    updated_at = serializers.CharField(help_text="更新时间")

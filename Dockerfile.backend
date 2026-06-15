@@ -27,7 +27,7 @@ COPY --from=builder /usr/local/bin/ /usr/local/bin/
 # 安装健康检查工具 (curl) 并创建运行时所需目录
 RUN apt-get update && apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/* && \
-    mkdir -p /app/data /app/log
+    mkdir -p /app/data /app/logs
 
 # 复制应用代码与配置
 COPY config/ ./config/

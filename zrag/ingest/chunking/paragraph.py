@@ -21,6 +21,16 @@ class ParagraphChunker(ChunkingStrategy):
         self.max_size = max_size
         self.min_size = min_size
 
+    def _resolve_title(self, document) -> str:
+        """解析文档标题，保证非空
+
+        优先级: metadata.title -> fallback(source_type_source_id)
+        """
+        title = (document.metadata.get("title") or "") if document.metadata else ""
+        if not title:
+            title = f"{document.source_type}_{document.source_id}"
+        return title
+
     def chunk(self, document: RawDocument) -> list[Chunk]:
         """将原始文档按段落切分为多个 Chunk
 
@@ -50,7 +60,7 @@ class ParagraphChunker(ChunkingStrategy):
                         chunk_id=f"{document.source_id}_chunk_{idx}",
                         source_id=document.source_id,
                         source_type=document.source_type,
-                        doc_title=document.metadata.get("title", "") if document.metadata else "",
+                        doc_title=self._resolve_title(document),
                         content=para,
                         chunk_index=idx,
                     ))
@@ -60,7 +70,7 @@ class ParagraphChunker(ChunkingStrategy):
                 chunk_id=f"{document.source_id}_chunk_{idx}",
                 source_id=document.source_id,
                 source_type=document.source_type,
-                doc_title=document.metadata.get("title", "") if document.metadata else "",
+                doc_title=self._resolve_title(document),
                 content=para[:self.max_size],
                 chunk_index=idx,
             ))

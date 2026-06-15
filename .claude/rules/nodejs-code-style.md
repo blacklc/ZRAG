@@ -135,11 +135,798 @@ abstract class CacheStore {
 - 类型定义文件（`.d.ts`）应存放于 `src/types/` 或与实现文件同级的 `types/` 目录中。
 - 项目所需的配置文件应存放于项目根目录中（如 `.env`、`.env.example`、`tsconfig.json`、`eslint.config.mjs` 等）。
 - 项目相关的常量定义应存放于 `src/constants/` 目录下。
+- `src/views/` 存放页面级 Vue 组件（对应路由的页面）。
+- `src/components/` 存放可复用的通用组件，按功能域可建立子目录（如 `src/components/chat/`）。
+- `src/composables/` 存放 Vue 3 组合式函数，每个 composable 聚焦单一领域概念。
+- `src/router/` 存放 Vue Router 路由配置，路由定义与页面组件映射集中管理。
+- `src/assets/` 存放图片、字体、全局样式等静态资源。
+- 与特定页面强绑定的组件可放在对应 `views/` 子目录下，避免 `components/` 过度膨胀。
 - 若项目有构建产出物，则这些产出物应存放于 `dist/` 或 `build/` 目录中，并确保通过 `.gitignore` 排除。
 
-## 命名规范
+## Vue 3 项目特有规范
 
-- **变量名**: 使用 `camelCase` 驼峰命名。
+### SFC 结构顺序
+
+Vue 单文件组件（SFC）应遵循 `template` → `script` → `style` 的结构顺序，各区块之间使用空行分隔。
+
+```vue
+<template>
+  <div class="user-card">
+    <h3>{{ user.name }}</h3>
+    <p>{{ user.email }}</p>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed } from 'vue'
+import type { User } from '@/types/user'
+
+const props = defineProps<{
+  user: User
+}>()
+
+const displayName = computed(() => props.user.name || '未知用户')
+</script>
+
+<style scoped>
+.user-card {
+  padding: 16px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+}
+</style>
+```
+
+### 优先使用 script setup 语法
+
+新建组件时统一使用 `<script setup lang="ts">` 语法，避免使用 Options API 的 `export default defineComponent({ ... })` 写法。`script setup` 提供了更简洁的语法和更好的类型推断支持。
+
+### 组件命名规范
+
+- 组件文件名使用 PascalCase，例如 `SourceCard.vue`、`UserProfile.vue`。
+- 在模板中引用组件时使用 kebab-case，例如 `<source-card />`、`<user-profile />`。
+- 全局注册的组件应在 `main.ts` 或独立的注册文件中集中管理。
+
+### Props 命名规范
+
+在 `<script setup>` 中使用 `camelCase` 定义 props，在模板中引用时使用 `kebab-case`。每个 prop 必须明确指定 `type`、`required` 或 `default`，并添加 JSDoc 注释说明用途。
+
+```vue
+<script setup lang="ts">
+/**
+ * 用户信息卡片组件
+ *
+ * 展示用户头像、名称和简介信息，支持自定义尺寸和点击事件。
+ * 当用户数据为空时显示占位内容。
+ */
+interface UserCardProps {
+  /** 用户显示名称 */
+  userName: string
+  /** 用户邮箱地址 */
+  email?: string
+  /** 头像 URL 地址 */
+  avatarUrl?: string
+  /** 卡片尺寸 */
+  size?: 'small' | 'medium' | 'large'
+}
+
+const props = withDefaults(defineProps<UserCardProps>(), {
+  email: '',
+  avatarUrl: '',
+  size: 'medium'
+})
+</script>
+
+<template>
+  <div class="user-card" :class="`user-card--${size}`">
+    <img :src="avatarUrl || '/default-avatar.png'" :alt="user-name" />
+    <h3>{{ userName }}</h3>
+    <p v-if="email">{{ email }}</p>
+  </div>
+</template>
+```
+
+### Emits 命名规范
+
+emit 的函数名在 `<script setup>` 中使用 `camelCase`，在模板中使用 `kebab-case`。每个 emit 应通过 `defineEmits` 显式声明。
+
+```vue
+<script setup lang="ts">
+const emit = defineEmits<{
+  /** 用户点击卡片时触发，返回用户 ID */
+  (e: 'card-click', userId: string): void
+  /** 用户关闭卡片时触发 */
+  (e: 'card-close'): void
+}>()
+
+function handleClick() {
+  emit('card-click', props.userId)
+}
+</script>
+
+<template>
+  <div class="card" @click="handleClick">
+    <button @click="$emit('card-close')">关闭</button>
+  </div>
+</template>
+```
+
+### 避免 v-if 与 v-for 同元素使用
+
+`v-if` 和 `v-for` 不应同时作用于同一个元素。推荐使用计算属性预先过滤数据，或使用外层包裹元素分别处理。
+
+```vue
+<script setup lang="ts">
+import { computed } from 'vue'
+import type { TodoItem } from '@/types/todo'
+
+const props = defineProps<{
+  todos: TodoItem[]
+}>()
+
+/** 过滤出未完成的待办事项 */
+const activeTodos = computed(() => props.todos.filter(todo => !todo.completed))
+</script>
+
+<template>
+  <!-- 正确做法：使用计算属性过滤 -->
+  <ul>
+    <li v-for="todo in activeTodos" :key="todo.id">
+      {{ todo.title }}
+    </li>
+  </ul>
+
+  <!-- 错误做法：v-if 与 v-for 同元素 -->
+  <!-- <ul>
+    <li v-for="todo in todos" v-if="!todo.completed" :key="todo.id">
+      {{ todo.title }}
+    </li>
+  </ul> -->
+</template>
+```
+
+### v-for 必须指定 key
+
+使用 `v-for` 渲染列表时，必须为每个元素提供唯一的 `key` 属性。优先使用数据中的唯一标识字段（如 `id`），避免使用索引作为 key。
+
+```vue
+<template>
+  <ul>
+    <li v-for="item in items" :key="item.id">
+      {{ item.name }}
+    </li>
+  </ul>
+</template>
+```
+
+### 模板逻辑应保持简洁
+
+模板中应避免复杂的表达式和条件逻辑。条件渲染和派生状态应优先使用计算属性（`computed`）封装，确保模板的可读性和可维护性。
+
+```vue
+<script setup lang="ts">
+import { computed } from 'vue'
+
+const props = defineProps<{
+  status: 'loading' | 'success' | 'error' | 'empty'
+}>()
+
+/** 根据状态值返回对应的提示文案 */
+const statusMessage = computed(() => {
+  const map: Record<string, string> = {
+    loading: '正在加载...',
+    success: '加载成功',
+    error: '加载失败，请重试',
+    empty: '暂无数据'
+  }
+  return map[props.status] || '未知状态'
+})
+
+/** 是否为加载完成状态 */
+const isFinished = computed(() =>
+  ['success', 'error', 'empty'].includes(props.status)
+)
+</script>
+
+<template>
+  <div>
+    <!-- 使用计算属性替代模板内联表达式 -->
+    <p>{{ statusMessage }}</p>
+    <button v-if="isFinished" @click="onRetry">重新加载</button>
+  </div>
+</template>
+```
+
+### 组件 JSDoc 注释
+
+每个组件应在 `<script setup>` 顶部或模板注释块中添加 JSDoc 注释，说明组件的用途、使用场景以及注意事项。
+
+```vue
+<script setup lang="ts">
+/**
+ * 文件上传组件
+ *
+ * 支持单文件和多文件上传，自动校验文件类型和大小。
+ * 上传进度通过 onProgress 回调暴露给父组件。
+ * 文件类型白名单通过 accept 属性配置。
+ *
+ * @usage
+ * ```vue
+ * <file-upload
+ *   :accept="['.pdf', '.docx']"
+ *   :max-size="10 * 1024 * 1024"
+ *   @upload-complete="handleUploadComplete"
+ * />
+ * ```
+ */
+// ...
+</script>
+```
+
+## Composable 设计规范
+
+Composable（组合式函数）是 Vue 3 中用于封装和复用有状态逻辑的核心模式。遵循以下规范可以确保 composable 的可维护性、可测试性和可组合性。
+
+### 单一职责原则
+
+一个 composable 应仅封装一个领域概念。如果某个 composable 同时管理任务生命周期、数据查询和 UI 提示，则应将不同职责拆分到独立的 composable 中。
+
+### 拆分时机
+
+当 composable 内部出现多个不直接相关的关注点时，应提取独立职责。例如从 `useIngest` 中拆分出 `useIngestTask`（任务生命周期）和 `useAvailableSources`（数据源查询），各自只做一件事。
+
+```typescript
+// 错误做法：一个 composable 承载多个领域概念
+// composables/useIngest.ts
+export function useIngest() {
+  const sources = ref<Source[]>([])
+  const taskId = ref<string | null>(null)
+  const status = ref<'idle' | 'running' | 'done'>('idle')
+  const hint = ref('')
+
+  async function fetchSources() { /* ... */ }
+  async function startTask(sourceId: string) { /* ... */ }
+  function showHint(msg: string) { hint.value = msg; setTimeout(() => hint.value = '', 3000) }
+
+  return { sources, taskId, status, hint, fetchSources, startTask, showHint }
+}
+
+// 正确做法：拆分为多个 composable
+// composables/useAvailableSources.ts
+export function useAvailableSources() {
+  const sources = ref<Source[]>([])
+  const loading = ref(false)
+
+  async function fetchSources() { /* ... */ }
+
+  return { sources, loading, fetchSources }
+}
+
+// composables/useIngestTask.ts
+export function useIngestTask() {
+  const taskId = ref<string | null>(null)
+  const status = ref<'idle' | 'running' | 'done'>('idle')
+
+  async function startTask(sourceId: string) { /* ... */ }
+
+  return { taskId, status, startTask }
+}
+```
+
+### 避免直接操作全局副作用
+
+不要在 composable 内部直接引用 `sessionStorage`、`localStorage`、`window` 或 toast 单例。应通过参数或适配器注入这些依赖，以便在测试时可以替换为 mock 实现。
+
+```typescript
+// 错误做法：直接依赖全局对象
+export function useTheme() {
+  const theme = ref(localStorage.getItem('theme') || 'light')
+  function setTheme(val: string) {
+    theme.value = val
+    localStorage.setItem('theme', val)
+  }
+  return { theme, setTheme }
+}
+
+// 正确做法：通过参数注入依赖
+export function useTheme(storage: Storage = localStorage) {
+  const theme = ref(storage.getItem('theme') || 'light')
+  function setTheme(val: string) {
+    theme.value = val
+    storage.setItem('theme', val)
+  }
+  return { theme, setTheme }
+}
+```
+
+### 最小化导出接口
+
+只导出调用方确实需要的 ref 和方法。内部使用的轮询定时器、中间处理函数等应保持私有，不暴露到 composable 的返回值中。
+
+```typescript
+// 错误做法：暴露内部实现细节
+export function usePolling() {
+  const timer = ref<number | null>(null)
+  const data = ref<Data | null>(null)
+
+  function start() {
+    timer.value = window.setInterval(fetch, 1000)
+  }
+  function stop() {
+    if (timer.value !== null) {
+      clearInterval(timer.value)
+      timer.value = null
+    }
+  }
+  return { timer, data, start, stop }
+}
+
+// 正确做法：隐藏内部细节
+export function usePolling() {
+  const data = ref<Data | null>(null)
+  let timer: number | null = null
+
+  function start() {
+    timer = window.setInterval(fetch, 1000)
+  }
+  function stop() {
+    if (timer !== null) {
+      clearInterval(timer)
+      timer = null
+    }
+  }
+
+  return { data, start, stop }
+}
+```
+
+### 使用 computed 派生状态
+
+将 `statusText`、`isIndeterminate`、`progressRatio` 等派生状态以 `computed` 属性暴露，而不是让视图层重复实现相同的逻辑判断。
+
+```typescript
+export function useIngestTask() {
+  const status = ref<'idle' | 'running' | 'done'>('idle')
+  const progress = ref(0)
+
+  /** 根据当前状态返回对应的中文提示文案 */
+  const statusText = computed(() => {
+    const map: Record<string, string> = {
+      idle: '待开始',
+      running: '正在摄入',
+      done: '摄入完成'
+    }
+    return map[status.value] || '未知状态'
+  })
+
+  /** 是否为不确定进度的加载中状态（进度为 0 但仍处于运行中） */
+  const isIndeterminate = computed(() =>
+    status.value === 'running' && progress.value === 0
+  )
+
+  /** 归一化的进度比例（0 ~ 1） */
+  const progressRatio = computed(() =>
+    Math.min(progress.value / 100, 1)
+  )
+
+  return { status, progress, statusText, isIndeterminate, progressRatio }
+}
+```
+
+### 保持 composable 与框架解耦
+
+业务规则应放在纯工具函数或常量模块中（如 `constants/ingest.js`、`utils/`），composable 只负责编排响应式状态和副作用。这样业务逻辑不依赖 Vue 框架，便于单元测试和复用。
+
+```typescript
+// constants/ingest.ts — 纯业务逻辑，不依赖 Vue
+export const INGEST_STATUS = {
+  IDLE: 'idle',
+  RUNNING: 'running',
+  DONE: 'done'
+} as const
+
+export const STATUS_LABEL: Record<string, string> = {
+  [INGEST_STATUS.IDLE]: '待开始',
+  [INGEST_STATUS.RUNNING]: '正在摄入',
+  [INGEST_STATUS.DONE]: '摄入完成'
+}
+
+export function isTerminalStatus(status: string): boolean {
+  return status === INGEST_STATUS.DONE
+}
+```
+
+```typescript
+// composables/useIngestTask.ts — 只编排响应式，不包含业务规则
+import { INGEST_STATUS, STATUS_LABEL, isTerminalStatus } from '@/constants/ingest'
+
+export function useIngestTask() {
+  const status = ref<string>(INGEST_STATUS.IDLE)
+
+  const statusText = computed(() => STATUS_LABEL[status.value] || '未知状态')
+  const isFinished = computed(() => isTerminalStatus(status.value))
+
+  return { status, statusText, isFinished }
+}
+```
+
+### 完整示例对比
+
+以下展示浅层 `useIngest` 与深层分离设计的差异。
+
+**浅层设计 — `useIngest` 承担过多职责：**
+
+```typescript
+// composables/useIngest.ts
+export function useIngest() {
+  const sources = ref<Source[]>([])
+  const loading = ref(false)
+  const error = ref('')
+  const taskId = ref<string | null>(null)
+  const taskStatus = ref<'idle' | 'running' | 'done'>('idle')
+  const timer = ref<number | null>(null)
+  const toast = ref('')
+
+  async function loadSources() {
+    loading.value = true
+    try {
+      sources.value = await api.getSources()
+    } catch (e) {
+      error.value = '加载失败'
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function startIngest() {
+    taskStatus.value = 'running'
+    const { id } = await api.startTask(sources.value[0].id)
+    taskId.value = id
+    timer.value = window.setInterval(pollStatus, 1000)
+  }
+
+  async function pollStatus() {
+    const result = await api.getTask(taskId.value!)
+    taskStatus.value = result.status
+    if (result.status === 'done') {
+      clearInterval(timer.value!)
+      toast.value = '摄入完成'
+    }
+  }
+
+  return { sources, loading, error, taskStatus, toast, loadSources, startIngest }
+}
+```
+
+**深层分离设计 — 拆分职责、注入依赖、提取常量：**
+
+```typescript
+// constants/ingest.ts
+export const POLL_INTERVAL_MS = 1000
+export const TASK_STATUS = {
+  IDLE: 'idle', RUNNING: 'running', DONE: 'done'
+} as const
+
+// composables/useAvailableSources.ts
+export function useAvailableSources() {
+  const sources = ref<Source[]>([])
+  const loading = ref(false)
+  const error = ref('')
+
+  async function loadSources() {
+    loading.value = true
+    try {
+      sources.value = await api.getSources()
+    } catch {
+      error.value = '加载失败'
+    } finally {
+      loading.value = false
+    }
+  }
+
+  return { sources, loading, error, loadSources }
+}
+
+// composables/useIngestTask.ts
+import { POLL_INTERVAL_MS, TASK_STATUS } from '@/constants/ingest'
+
+export function useIngestTask(opts: {
+  onToast?: (msg: string) => void
+  setInterval?: typeof setInterval
+  clearInterval?: typeof clearInterval
+} = {}) {
+  const { onToast, setInterval = window.setInterval, clearInterval = window.clearInterval } = opts
+  const taskId = ref<string | null>(null)
+  const status = ref<string>(TASK_STATUS.IDLE)
+  let timer: number | null = null
+
+  async function start(sourceId: string) {
+    status.value = TASK_STATUS.RUNNING
+    const { id } = await api.startTask(sourceId)
+    taskId.value = id
+    timer = setInterval(pollStatus, POLL_INTERVAL_MS)
+  }
+
+  async function pollStatus() {
+    const result = await api.getTask(taskId.value!)
+    status.value = result.status
+    if (result.status === TASK_STATUS.DONE) {
+      if (timer !== null) clearInterval(timer)
+      onToast?.('摄入完成')
+    }
+  }
+
+  function stop() {
+    if (timer !== null) {
+      clearInterval(timer)
+      timer = null
+    }
+    status.value = TASK_STATUS.IDLE
+  }
+
+  /** 是否处于运行中 */
+  const isRunning = computed(() => status.value === TASK_STATUS.RUNNING)
+  /** 是否已完成 */
+  const isDone = computed(() => status.value === TASK_STATUS.DONE)
+
+  return { taskId, status, isRunning, isDone, start, stop }
+}
+```
+
+## 前端测试规范
+
+前端项目采用 Vitest + Vue Test Utils 作为测试框架。以下规范覆盖测试文件的组织方式、各类测试的编写要点以及常见注意事项。
+
+### 测试文件存放与命名
+
+测试文件统一存放于 `src/__tests__/` 目录下，目录结构镜像源码结构以便快速定位。也可以选择在源文件旁放置 `__tests__/` 目录进行 co-locate 管理，团队内统一一种方式即可。
+
+测试文件命名采用 `*.test.js` 或 `*.test.ts` 格式，与源文件同名。例如 `utils/format.js` 对应的测试文件为 `__tests__/utils/format.test.js`。
+
+### 纯工具函数测试
+
+对于不依赖 Vue 响应式系统的纯工具函数，应直接导入并调用，使用代表性的输入数据覆盖正常路径、边界值和异常情况。
+
+```typescript
+// utils/format.ts
+export function formatFileSize(bytes: number, decimals: number = 2): string {
+  if (bytes === 0) return '0 Bytes';
+  const units = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${parseFloat((bytes / Math.pow(1024, i)).toFixed(decimals))} ${units[i]}`;
+}
+```
+
+```typescript
+// __tests__/utils/format.test.ts
+import { describe, it, expect } from 'vitest'
+import { formatFileSize } from '@/utils/format'
+
+describe('formatFileSize', () => {
+  it('should return "0 Bytes" when bytes is 0', () => {
+    expect(formatFileSize(0)).toBe('0 Bytes')
+  })
+
+  it('should format bytes correctly', () => {
+    expect(formatFileSize(1024)).toBe('1.00 KB')
+    expect(formatFileSize(1048576)).toBe('1.00 MB')
+    expect(formatFileSize(1073741824)).toBe('1.00 GB')
+  })
+
+  it('should respect decimal places parameter', () => {
+    expect(formatFileSize(1536, 1)).toBe('1.5 KB')
+  })
+})
+```
+
+### Composable 测试
+
+测试 composable 时，应在 `setup()` 内部或在异步测试包装器中实例化 composable，从而获得完整的 Vue 响应式上下文。
+
+对于依赖浏览器全局对象（如 `localStorage`、`setInterval`、`fetch`）或第三方 SDK（如 toast）的 composable，应通过参数注入 mock 适配器，测试时传入替代实现。
+
+```typescript
+// composables/useIngestTask.ts
+export function useIngestTask(opts: {
+  onToast?: (msg: string) => void
+  setInterval?: typeof setInterval
+  clearInterval?: typeof clearInterval
+} = {}) {
+  const { onToast, setInterval = globalThis.setInterval, clearInterval = globalThis.clearInterval } = opts
+  // ...
+}
+```
+
+```typescript
+// __tests__/composables/useIngestTask.test.ts
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { useIngestTask } from '@/composables/useIngestTask'
+
+describe('useIngestTask', () => {
+  let onToast: ReturnType<typeof vi.fn>
+  let setInterval: ReturnType<typeof vi.fn>
+  let clearInterval: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    onToast = vi.fn()
+    setInterval = vi.fn(() => 42)
+    clearInterval = vi.fn()
+  })
+
+  it('should start task and set up polling', async () => {
+    const { start, status } = useIngestTask({ onToast, setInterval, clearInterval })
+    await start('source-1')
+    expect(status.value).toBe('running')
+    expect(setInterval).toHaveBeenCalledOnce()
+  })
+})
+```
+
+### API Mock 策略
+
+应优先在 `api/index.js` 的导出层或具体的 endpoint 函数层级进行 mock，而不是 mock `globalThis.fetch`。直接 mock fetch 容易遗漏 `Response.headers.get` 等方法的模拟，导致生产代码在调用 `headers.get` 时抛出 `TypeError`。
+
+```typescript
+// api/endpoints.js
+import { httpClient } from './http'
+
+export async function getSources() {
+  const res = await httpClient.get('/api/sources')
+  return res.data
+}
+```
+
+```typescript
+// __tests__/api/endpoints.test.ts
+import { describe, it, expect, vi } from 'vitest'
+
+// 在 api/index 层级 mock，而非 mock globalThis.fetch
+vi.mock('@/api/endpoints', () => ({
+  getSources: vi.fn()
+}))
+
+import { getSources } from '@/api/endpoints'
+
+describe('getSources', () => {
+  it('should return source list', async () => {
+    vi.mocked(getSources).mockResolvedValue([
+      { id: '1', name: 'Source A' }
+    ])
+    const result = await getSources()
+    expect(result).toHaveLength(1)
+  })
+})
+```
+
+如果确实需要 mock 底层 HTTP 请求，应确保 mock 的 `Response` 对象包含 `headers.get` 等生产代码可能使用的方法。
+
+```typescript
+// 当生产代码需要读取响应头时，必须模拟 headers.get
+function createMockResponse(data: unknown, headers: Record<string, string> = {}) {
+  return {
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve(data),
+    headers: {
+      get: (key: string) => headers[key] ?? null
+    }
+  }
+}
+```
+
+### 组件测试
+
+组件测试应关注用户可见的输出和组件发出的事件，避免测试内部 ref 值或私有方法等实现细节。使用 `@vue/test-utils` 的 `mount` 或 `shallowMount` 渲染组件，通过 `find`、`findComponent`、`text()`、`emitted()` 等 API 验证行为。
+
+```typescript
+// __tests__/components/UserCard.test.ts
+import { describe, it, expect } from 'vitest'
+import { mount } from '@vue/test-utils'
+import UserCard from '@/components/UserCard.vue'
+
+describe('UserCard', () => {
+  it('should display user name', () => {
+    const wrapper = mount(UserCard, {
+      props: { userName: 'Alice', email: 'alice@example.com' }
+    })
+    expect(wrapper.text()).toContain('Alice')
+  })
+
+  it('should emit card-click when card is clicked', async () => {
+    const wrapper = mount(UserCard, {
+      props: { userName: 'Alice', userId: 'u-001' }
+    })
+    await wrapper.find('.card').trigger('click')
+    expect(wrapper.emitted('card-click')).toBeTruthy()
+    expect(wrapper.emitted('card-click')![0]).toEqual(['u-001'])
+  })
+
+  it('should show default avatar when avatarUrl is empty', () => {
+    const wrapper = mount(UserCard, {
+      props: { userName: 'Bob', avatarUrl: '' }
+    })
+    const img = wrapper.find('img')
+    expect(img.attributes('src')).toBe('/default-avatar.png')
+  })
+})
+```
+
+### 时区感知
+
+涉及时间格式化的测试应固定时区，避免 CI 环境与本地环境的时区差异导致测试失败。可以在测试运行前设置环境变量 `TZ=UTC`，或在测试文件中通过 `vi.setSystemTime` 配合时区信息进行断言。优先选择对本地格式化输出进行断言，而非硬编码 UTC 预期值。
+
+```typescript
+// 方式一：在 vitest.config.ts 中全局固定时区
+// export default defineConfig({
+//   test: {
+//     env: { TZ: 'UTC' }
+//   }
+// })
+
+// 方式二：在测试文件中断言本地格式化输出
+describe('时间格式化', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2025-06-15T10:30:00Z'))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('should format date in local timezone', () => {
+    const result = formatDate(new Date())
+    // 断言本地格式化后的字符串，不硬编码 UTC 预期
+    expect(result).toBe(
+      new Intl.DateTimeFormat('zh-CN', {
+        year: 'numeric', month: '2-digit', day: '2-digit'
+      }).format(new Date('2025-06-15T10:30:00Z'))
+    )
+  })
+})
+```
+
+### 浏览器 API Mock
+
+测试使用 `sessionStorage`、`localStorage`、`setInterval` 等浏览器 API 的代码时，应在每个测试之前创建干净的 mock 实现，并在 `beforeEach`/`afterEach` 中重置状态，避免测试间互相影响。
+
+```typescript
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+describe('useTheme', () => {
+  let mockStorage: Record<string, string>
+
+  beforeEach(() => {
+    mockStorage = {}
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => mockStorage[key] ?? null,
+      setItem: (key: string, value: string) => { mockStorage[key] = value },
+      removeItem: (key: string) => { delete mockStorage[key] },
+      clear: () => { mockStorage = {} }
+    })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('should return default theme when nothing is stored', () => {
+    const { theme } = useTheme()
+    expect(theme.value).toBe('light')
+  })
+
+  it('should persist theme to storage', () => {
+    const { theme, setTheme } = useTheme()
+    setTheme('dark')
+    expect(theme.value).toBe('dark')
+    expect(mockStorage.theme).toBe('dark')
+  })
+})
+```
+
+### 运行测试
+
+使用 `npm test` 或 `npx vitest run` 执行测试。开发阶段可以使用 `npx vitest`（watch 模式）进行迭代。CI 环境中应使用 `npx vitest run --reporter=verbose` 获取详细的测试结果输出。
 - **常量名**: 使用 `UPPER_SNAKE_CASE` 或 `camelCase`。当常量值为字符串/数字字面量且全项目通用时，推荐 `UPPER_SNAKE_CASE`。
 - **函数名**: 使用 `camelCase`，动词开头（如 `getUser`、`createOrder`、`deleteFile`）。
 - **类名与构造函数**: 使用 `PascalCase`。

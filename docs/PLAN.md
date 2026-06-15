@@ -194,5 +194,115 @@
 | 45 | docker-compose.yml + .env 模板 + .dockerignore | ✅ | - | `11b1f83` |
 | — | 构建修复: requirements.txt 精简 + curl + log 路径修正 + views.py 延迟导入 | ✅ | - | `(待提交)` |
 | — | 日志分级拆分: log_filter.py + settings.py 4 文件 | ✅ | - | `(待提交)` |
+| 46 | config/ingest.yaml — task_pool_size + settings.py — ZRAG_INGEST_EXECUTOR | ✅ | - | - |
+| 47 | SQLiteStore — init_db() 新增 ingest_tasks 建表 | ✅ | - | - |
+| 48 | TaskStatus 枚举 + IngestTask dataclass | ✅ | - | - |
+| 49 | TaskManager 模块级单例 | ✅ | - | - |
+| 50 | IngestionPipeline — run() 新增 should_cancel/on_document_done，移除 on_progress/ProgressEvent | ✅ | - | - |
+| 51 | MacNotesSource — 文件桥接模式，移除 AppleScript | ✅ | - | - |
+| 52 | DocumentViewSet.ingest() — 改为异步返回 202 + task_id | ✅ | - | - |
+| 53 | IngestTaskViewSet — status + cancel 端点 | ✅ | - | - |
+| 54 | zrag/api/urls.py — 新增 task/sources/available 路由 | ✅ | - | - |
+| 55 | schema_serializers.py — 新增 task 相关 Serializer | ✅ | - | - |
+| 56 | zrag/export_notes.py — 宿主机导出脚本 | ✅ | - | - |
+| 57 | frontend/src/api/endpoints.js — 新增端点函数 | ✅ | - | - |
+| 58 | frontend/src/composables/useIngest.js — 新建 composable | ✅ | - | - |
+| 59 | frontend/src/views/SourcesView.vue — 异步交互改造 | ✅ | - | - |
+| 60 | 抽象类父类型检查（4 处） | ✅ | - | - |
+| 61 | docs/design.md — 同步 manifest.json、IngestTaskViewSet 等 | ✅ | - | - |
+| 62 | `_html_to_markdown()` 五阶段转换增强 | ⬜ | - | - |
+| 63 | 新增 `HeadingChunker` 类 | ⬜ | - | - |
+| 64 | registry 中 mac_notes 改用 HeadingChunker | ⬜ | - | - |
+| 65 | 安装 jieba + requirements.txt | ⬜ | - | - |
+| 66 | sqlite_store 新增 `_tokenize_text()` | ⬜ | - | - |
+| 67 | FTS5 写入路径集成 jieba 分词 | ⬜ | - | - |
+| 68 | FTS5 查询路径集成 jieba 分词 | ⬜ | - | - |
+| 69 | `SearchResult` 新增 `chunk_index` 字段 | ⬜ | - | - |
+| 70 | `_build_results()` 传递 `chunk_index` | ⬜ | - | - |
+| 71 | `build_rag_prompt()` 同源 chunks 合并 | ⬜ | - | - |
+| 72 | 清空数据库 + 端到端验证 | ⬜ | - | - |
 
 - ✅ 已完成 · 🔄 进行中 · ⬜ 待开始 · ⚠ HITL 升级
+
+---
+
+## 新增切片（#46-#61）— macOS Notes 异步文件桥接方案
+
+### 配置 + 存储
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 46 | config/ingest.yaml — task_pool_size + settings.py — ZRAG_INGEST_EXECUTOR | AFK | 1 |
+| 47 | SQLiteStore — init_db() 新增 ingest_tasks 建表 | AFK | 4 |
+
+### 任务核心
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 48 | TaskStatus 枚举 + IngestTask dataclass | AFK | 46 |
+| 49 | TaskManager 模块级单例 | AFK | 48, 47 |
+
+### Pipeline
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 50 | IngestionPipeline — run() 新增 should_cancel/on_document_done，移除 on_progress/ProgressEvent | AFK | 48 |
+
+### Source
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 51 | MacNotesSource — 文件桥接模式，移除 AppleScript | AFK | 49 |
+
+### API
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 52 | DocumentViewSet.ingest() — 改为异步返回 202 + task_id | AFK | 50, 51 |
+| 53 | IngestTaskViewSet — status + cancel 端点 | AFK | 49 |
+| 54 | zrag/api/urls.py — 新增 task/sources/available 路由 | AFK | 52, 53 |
+| 55 | schema_serializers.py — 新增 task 相关 Serializer | AFK | 52 |
+
+### 导出脚本
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 56 | zrag/export_notes.py — 宿主机导出脚本 | AFK | 无 |
+
+### 前端
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 57 | frontend/src/api/endpoints.js — 新增端点函数 | AFK | 53 |
+| 58 | frontend/src/composables/useIngest.js — 新建 composable | AFK | 57 |
+| 59 | frontend/src/views/SourcesView.vue — 异步交互改造 | AFK | 58 |
+
+### 代码质量
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 60 | 抽象类父类型检查（4 处） | AFK | 50, 51, 52 |
+
+### 文档
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 61 | docs/design.md — 同步 manifest.json、IngestTaskViewSet 等 | AFK | 全 |
+
+### 混合检索准确度优化（#62-#72）
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 62 | `_html_to_markdown()` 五阶段转换增强 | AFK | 无 |
+| 63 | 新增 `HeadingChunker` 类 | AFK | 无 |
+| 64 | registry 中 mac_notes 改用 `CompositeChunker(HeadingChunker, RecursiveCharacterChunker)` | AFK | 63 |
+| 65 | 安装 jieba + requirements.txt | AFK | 无 |
+| 66 | sqlite_store 新增 `_tokenize_text()` | AFK | 65 |
+| 67 | FTS5 写入路径集成 jieba 分词 | AFK | 66 |
+| 68 | FTS5 查询路径集成 jieba 分词 | AFK | 66 |
+| 69 | `SearchResult` 新增 `chunk_index` 字段 | AFK | 无 |
+| 70 | `_build_results()` 传递 `chunk_index` | AFK | 69 |
+| 71 | `build_rag_prompt()` 同源 chunks 合并 | AFK | 70 |
+| 72 | 清空数据库 + 端到端验证 | AFK | 62,64,68,71 |
+
+

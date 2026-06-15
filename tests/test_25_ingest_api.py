@@ -1,8 +1,11 @@
-"""测试切片 25 — POST /v1/documents/ingest + GET /v1/sources
+"""测试切片 25 — ingest API (异步) + task 管理 + source 列表
 
 测试内容:
-  - POST /v1/documents/ingest -> 返回 200 + IngestReport
+  - POST /v1/documents/ingest -> 返回 202 + task_id (异步)
   - GET /v1/sources -> 返回 source 列表
+  - GET /v1/sources/available -> 返回已注册数据源类型列表
+  - GET /v1/ingest/{id}/status -> 返回任务状态
+  - POST /v1/ingest/{id}/cancel -> 取消任务
   - 缺少 API key -> 401
   - 请求体校验 -> 无效参数返回 400
 """
@@ -13,126 +16,107 @@ from unittest.mock import MagicMock, patch
 import pytest
 from django.test.utils import override_settings
 
-from zrag.ingest.pipeline import IngestReport
+from contextlib import contextmanager
+
+from zrag.api.task_manager import IngestTask, TaskStatus
+from zrag.embed.base import EmbeddingModel
+from zrag.ingest.chunking.base import ChunkingStrategy
+
+
+@contextmanager
+def _mock_pipeline_deps():
+    """mock 所有 Pipeline 依赖（避免 HuggingFace 模型下载）"""
+    with (
+        patch("zrag.embed.local.get_embedder") as mock_emb,
+        patch("zrag.ingest.chunking.registry.get_chunker") as mock_chunk,
+        patch("zrag.store.vector_store.get_chroma_store") as mock_chroma,
+    ):
+        mock_emb.return_value = MagicMock(spec=EmbeddingModel)
+        mock_chunk.return_value = MagicMock(spec=ChunkingStrategy)
+        mock_chroma.return_value = MagicMock()
+        yield
 
 TEST_API_KEY = "test-api-key-for-slice-25"
-
-
-def _make_report(
-    total=3, new=2, updated=0, skipped=1, failed=0, errors=None
-) -> IngestReport:
-    """创建 IngestReport 测试辅助方法
-
-    @param total: 文档总数, defaults to 3
-    @type  total: int
-    @param new: 新导入数, defaults to 2
-    @type  new: int
-    @param updated: 更新数, defaults to 0
-    @type  updated: int
-    @param skipped: 跳过数, defaults to 1
-    @type  skipped: int
-    @param failed: 失败数, defaults to 0
-    @type  failed: int
-    @param errors: 错误详情列表, defaults to None
-    @type  errors: list | None
-
-    @return: 模拟的 IngestReport 实例
-    @rtype:  IngestReport
-    """
-    report = IngestReport(
-        total=total,
-        new=new,
-        updated=updated,
-        skipped=skipped,
-        failed=failed,
-    )
-    if errors:
-        report.errors = errors
-    return report
 
 
 class TestIngestAPI:
     """POST /v1/documents/ingest API 测试类"""
 
     # ----------------------------------------------------------
-    # 1. POST /v1/documents/ingest -> 200 + report
+    # 1. POST /v1/documents/ingest -> 202 + task_id
     # ----------------------------------------------------------
 
     @override_settings(ZRAG_API_KEY=TEST_API_KEY)
-    @patch("zrag.api.views.IngestionPipeline")
-    def test_ingest_returns_report(self, mock_pipeline_cls, client):
-        """正常摄入请求返回 200 和 IngestReport"""
-        # 准备 mock pipeline
-        mock_pipeline = MagicMock()
-        mock_pipeline.run.return_value = _make_report(
-            total=3, new=2, skipped=1,
-        )
-        mock_pipeline_cls.return_value = mock_pipeline
+    @patch("zrag.api.views.TaskManager")
+    def test_ingest_returns_task(self, mock_task_manager_cls, client):
+        """正常摄入请求返回 202 和 task_id"""
+        with _mock_pipeline_deps():
+            mock_manager = MagicMock()
+            mock_task = MagicMock()
+            mock_task.id = "fake-task-id-001"
+            mock_task.status = type('_', (), {'value': 'pending'})()
+            mock_manager.create_task.return_value = mock_task
+            mock_task_manager_cls.get_instance.return_value = mock_manager
 
-        resp = client.post(
-            "/v1/documents/ingest",
-            data=json.dumps({"source_type": "mac_notes", "full": False}),
-            content_type="application/json",
-            HTTP_AUTHORIZATION=f"Bearer {TEST_API_KEY}",
-        )
+            resp = client.post(
+                "/v1/documents/ingest",
+                data=json.dumps({"source_type": "mac_notes", "full": False}),
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {TEST_API_KEY}",
+            )
 
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["Message"] == "success"
-        assert body["Data"]["total"] == 3
-        assert body["Data"]["new"] == 2
-        assert body["Data"]["skipped"] == 1
-        assert body["Data"]["updated"] == 0
-        assert body["Data"]["failed"] == 0
-        assert body["Data"]["errors"] == []
-        assert "RequestID" in body
+            assert resp.status_code == 202
+            body = resp.json()
+            assert body["Message"] == "success"
+            assert body["Data"]["task_id"] == "fake-task-id-001"
+            assert body["Data"]["status"] == "pending"
+            assert "RequestID" in body
 
     @override_settings(ZRAG_API_KEY=TEST_API_KEY)
-    @patch("zrag.api.views.IngestionPipeline")
-    def test_ingest_with_errors(self, mock_pipeline_cls, client):
-        """摄入出现错误时, report 中包含 errors 列表"""
-        mock_pipeline = MagicMock()
-        mock_pipeline.run.return_value = _make_report(
-            total=2, new=1, failed=1,
-            errors=[
-                MagicMock(source_id="doc_err", error="处理失败"),
-            ],
-        )
-        mock_pipeline_cls.return_value = mock_pipeline
+    @patch("zrag.api.views.TaskManager")
+    def test_ingest_with_full(self, mock_task_manager_cls, client):
+        """full=True 时 task_type 为 full"""
+        with _mock_pipeline_deps():
+            mock_manager = MagicMock()
+            mock_task = MagicMock()
+            mock_task.id = "fake-task-id-002"
+            mock_task.status = type('_', (), {'value': 'pending'})()
+            mock_manager.create_task.return_value = mock_task
+            mock_task_manager_cls.get_instance.return_value = mock_manager
 
-        resp = client.post(
-            "/v1/documents/ingest",
-            data=json.dumps({"source_type": "mac_notes"}),
-            content_type="application/json",
-            HTTP_AUTHORIZATION=f"Bearer {TEST_API_KEY}",
-        )
+            resp = client.post(
+                "/v1/documents/ingest",
+                data=json.dumps({"source_type": "mac_notes", "full": True}),
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {TEST_API_KEY}",
+            )
 
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["Data"]["failed"] == 1
-        assert len(body["Data"]["errors"]) == 1
-        assert body["Data"]["errors"][0]["source_id"] == "doc_err"
-        assert body["Data"]["errors"][0]["error"] == "处理失败"
+            assert resp.status_code == 202
+            body = resp.json()
+            assert body["Data"]["task_id"] == "fake-task-id-002"
+            mock_manager.create_task.assert_called_once_with(task_type="full")
 
     @override_settings(ZRAG_API_KEY=TEST_API_KEY)
-    @patch("zrag.api.views.IngestionPipeline")
-    def test_ingest_default_full_false(self, mock_pipeline_cls, client):
+    @patch("zrag.api.views.TaskManager")
+    def test_ingest_default_full_false(self, mock_task_manager_cls, client):
         """未指定 full 时默认为 False"""
-        mock_pipeline = MagicMock()
-        mock_pipeline.run.return_value = _make_report()
-        mock_pipeline_cls.return_value = mock_pipeline
+        with _mock_pipeline_deps():
+            mock_manager = MagicMock()
+            mock_task = MagicMock()
+            mock_task.id = "fake-task-id-003"
+            mock_task.status = type('_', (), {'value': 'pending'})()
+            mock_manager.create_task.return_value = mock_task
+            mock_task_manager_cls.get_instance.return_value = mock_manager
 
-        resp = client.post(
-            "/v1/documents/ingest",
-            data=json.dumps({"source_type": "mac_notes"}),
-            content_type="application/json",
-            HTTP_AUTHORIZATION=f"Bearer {TEST_API_KEY}",
-        )
+            resp = client.post(
+                "/v1/documents/ingest",
+                data=json.dumps({"source_type": "mac_notes"}),
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {TEST_API_KEY}",
+            )
 
-        assert resp.status_code == 200
-        # 验证 run 的 full 参数为 False
-        _, kwargs = mock_pipeline.run.call_args
-        assert kwargs.get("full") is False
+            assert resp.status_code == 202
+            mock_manager.create_task.assert_called_once_with(task_type="incremental")
 
     # ----------------------------------------------------------
     # 2. GET /v1/sources -> source 列表
@@ -258,6 +242,155 @@ class TestIngestAPI:
         )
 
         assert resp.status_code == 400
+
+    # ----------------------------------------------------------
+    # 5. GET /v1/sources/available -> 200 + sources list
+    # ----------------------------------------------------------
+
+    @override_settings(ZRAG_API_KEY=TEST_API_KEY)
+    def test_list_available_sources(self, client):
+        """GET /v1/sources/available 返回已注册的数据源类型列表"""
+        resp = client.get(
+            "/v1/sources/available",
+            HTTP_AUTHORIZATION=f"Bearer {TEST_API_KEY}",
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "sources" in body["Data"]
+        # 至少包含 mac_notes
+        assert "mac_notes" in body["Data"]["sources"]
+
+    # ----------------------------------------------------------
+    # 6. GET /v1/ingest/{id}/status -> task status
+    # ----------------------------------------------------------
+
+    @override_settings(ZRAG_API_KEY=TEST_API_KEY)
+    @patch("zrag.api.views.TaskManager")
+    def test_ingest_task_status(self, mock_task_manager_cls, client):
+        """查询存在的任务时返回 200 + 任务详情"""
+        mock_task = IngestTask(
+            id="task-status-001",
+            task_type="full",
+            status=TaskStatus.PROCESSING,
+            total=10,
+            processed=5,
+            created_at="2026-06-10T10:00:00",
+            updated_at="2026-06-10T10:05:00",
+        )
+        mock_manager = MagicMock()
+        mock_manager.get_task.return_value = mock_task
+        mock_manager.to_dict.return_value = {
+            "task_id": "task-status-001",
+            "task_type": "full",
+            "status": "processing",
+            "total": 10,
+            "processed": 5,
+            "created_at": "2026-06-10T10:00:00",
+            "updated_at": "2026-06-10T10:05:00",
+        }
+        mock_task_manager_cls.get_instance.return_value = mock_manager
+
+        resp = client.get(
+            "/v1/ingest/task-status-001/status",
+            HTTP_AUTHORIZATION=f"Bearer {TEST_API_KEY}",
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["Data"]["task_id"] == "task-status-001"
+        assert body["Data"]["status"] == "processing"
+        assert body["Data"]["total"] == 10
+        assert body["Data"]["processed"] == 5
+
+    @override_settings(ZRAG_API_KEY=TEST_API_KEY)
+    @patch("zrag.api.views.TaskManager")
+    def test_ingest_task_status_not_found(self, mock_task_manager_cls, client):
+        """查询不存在的任务时返回 404"""
+        mock_manager = MagicMock()
+        mock_manager.get_task.return_value = None
+        mock_task_manager_cls.get_instance.return_value = mock_manager
+
+        resp = client.get(
+            "/v1/ingest/non-existent-task/status",
+            HTTP_AUTHORIZATION=f"Bearer {TEST_API_KEY}",
+        )
+
+        assert resp.status_code == 404
+        body = resp.json()
+        assert "not found" in body["Message"].lower()
+
+    # ----------------------------------------------------------
+    # 7. POST /v1/ingest/{id}/cancel -> cancel task
+    # ----------------------------------------------------------
+
+    @override_settings(ZRAG_API_KEY=TEST_API_KEY)
+    @patch("zrag.api.views.TaskManager")
+    def test_ingest_task_cancel(self, mock_task_manager_cls, client):
+        """取消存在的任务时返回 200"""
+        mock_task = IngestTask(
+            id="task-cancel-001",
+            task_type="full",
+            status=TaskStatus.PROCESSING,
+        )
+        mock_manager = MagicMock()
+        mock_manager.get_task.return_value = mock_task
+        mock_manager.to_dict.return_value = {
+            "task_id": "task-cancel-001",
+            "task_type": "full",
+            "status": "cancelled",
+        }
+        mock_task_manager_cls.get_instance.return_value = mock_manager
+
+        resp = client.post(
+            "/v1/ingest/task-cancel-001/cancel",
+            HTTP_AUTHORIZATION=f"Bearer {TEST_API_KEY}",
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["Data"]["task_id"] == "task-cancel-001"
+        # 验证 cancel_task 被调用
+        mock_manager.cancel_task.assert_called_once_with("task-cancel-001")
+
+    @override_settings(ZRAG_API_KEY=TEST_API_KEY)
+    @patch("zrag.api.views.TaskManager")
+    def test_ingest_task_cancel_not_found(self, mock_task_manager_cls, client):
+        """取消不存在的任务时返回 404"""
+        mock_manager = MagicMock()
+        mock_manager.get_task.return_value = None
+        mock_task_manager_cls.get_instance.return_value = mock_manager
+
+        resp = client.post(
+            "/v1/ingest/non-existent-task/cancel",
+            HTTP_AUTHORIZATION=f"Bearer {TEST_API_KEY}",
+        )
+
+        assert resp.status_code == 404
+        body = resp.json()
+        assert "not found" in body["Message"].lower()
+
+    # ----------------------------------------------------------
+    # 8. Auth check for task endpoints
+    # ----------------------------------------------------------
+
+    @override_settings(ZRAG_API_KEY=TEST_API_KEY)
+    def test_task_status_missing_api_key(self, client):
+        """查询任务状态缺少 API Key 时返回 401"""
+        resp = client.get("/v1/ingest/some-task/status")
+        assert resp.status_code == 401
+
+    @override_settings(ZRAG_API_KEY=TEST_API_KEY)
+    def test_task_cancel_missing_api_key(self, client):
+        """取消任务缺少 API Key 时返回 401"""
+        resp = client.post("/v1/ingest/some-task/cancel")
+        assert resp.status_code == 401
+
+    @override_settings(ZRAG_API_KEY=TEST_API_KEY)
+    def test_available_sources_missing_api_key(self, client):
+        """GET /v1/sources/available 缺少 API Key 时返回 401"""
+        resp = client.get("/v1/sources/available")
+        assert resp.status_code == 401
 
 
 class TestIngestSerializer:

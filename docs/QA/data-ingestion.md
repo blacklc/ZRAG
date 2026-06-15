@@ -435,8 +435,8 @@ def upsert_processed(self, doc: RawDocument):
 ```
 data/pro/export/<task_id>/
   ├── manifest.json         # 后端写入 {task_id,task_type,source_type,processed_docs[]}
-  ├── result.json           # 导出脚本写入 {"status":"ok","total":3699}
-  └── <note_id>.json        # 单条笔记 {id,name,folder,content}
+  ├── result.json           # 导出脚本写入 {"status":"ok","task_id":"abc-123-def","expected":150,"success":128,"exported_at":"2026-06-09T10:30:00+08:00"}
+  └── <note_id>.json        # 单条笔记 {"source_id","source_type","content","content_hash","metadata"}
 ```
 
 - 增量模式: manifest.json 中含 processed_docs，导出脚本对比 hash 只导出变更
@@ -444,34 +444,64 @@ data/pro/export/<task_id>/
 
 ### 38.3 任务抽象
 
-**TaskStatus**:
+**日期更新**: 2026-06-10
+
+**TaskStatus**（更新后）:
+
 ```python
-PENDING     # 已提交，等待线程池调度
-EXPORTING   # 等待宿主机导出文件就绪（mac_notes 专用）
-INGESTING   # Pipeline 逐篇 chunk→embed→store
-DONE        # 全部完成
-CANCELLED   # 用户手动取消
-ERROR       # 异常终止
+class TaskStatus(str, Enum):
+    PENDING = "pending"              # 已创建任务，等待用户执行导出脚本
+    WAITING_EXPORT = "waiting"       # 容器侧轮询等待 result.json
+    PROCESSING = "processing"        # Pipeline 逐篇 chunk→embed→store
+    DONE = "done"                    # 全部完成
+    CANCELLED = "cancelled"          # 用户手动取消
+    FAILED = "failed"                # 异常终止
 ```
 
-**DB 表 ingest_tasks**: id, task_type, status, total, processed, created_at, updated_at
+| 状态 | 含义 | 可取消 |
+|------|------|:--:|
+| `PENDING` | 后端已创建任务，写入 manifest.json | ✅ |
+| `WAITING_EXPORT` | 容器侧轮询等待 result.json | ✅ |
+| `PROCESSING` | result.json 就绪，Pipeline 处理中 | ✅ |
+| `DONE` | 全部完成 | ❌ |
+| `CANCELLED` | 已被用户取消（终态） | ❌ |
+| `FAILED` | 异常终止（终态） | ❌ |
 
-**IngestTask**（内存对象）: 与 DB 表字段一一对应
+任意非终态（PENDING/WAITING_EXPORT/PROCESSING）都可以被取消。
 
-### 38.4 TaskManager — 线程池 + 取消机制
+**IngestTask**（内存对象，字段与 DB 表一一对应）:
 
-- 线程池: `ThreadPoolExecutor(max_workers=2)` 定义在 settings.py `ZRAG_INGEST_EXECUTOR`，注入 TaskManager
-- 配置: `config/ingest.yaml` → `task_pool_size: 2`
-- 取消: `threading.Event` 纳秒级检查，每篇文档处理前 `is_set()`；DB 双写兜底
+```python
+@dataclass
+class IngestTask:
+    id: str                     # DB: id (TEXT PK)
+    task_type: str              # DB: task_type (TEXT)
+    status: TaskStatus          # DB: status (TEXT)
+    total: int = 0              # DB: total (INTEGER)
+    processed: int = 0          # DB: processed (INTEGER)
+    created_at: str = ""        # DB: created_at (TEXT)
+    updated_at: str = ""        # DB: updated_at (TEXT)
+```
 
-### 38.5 Pipeline 改动
+取消信号由 TaskManager 的 `_events` dict 统一管理，不与 IngestTask 耦合。
 
-- `all_docs = []` 移除，改为逐篇 `for doc in source.fetch_batch()`
-- 每篇前检查取消信号
-- 每篇后更新 task.processed
-- 完成后清理线程删除 `data/pro/export/<task_id>/`
+**DB 表 ingest_tasks**: id, task_type, status, total, processed, created_at, updated_at（7列，与 IngestTask 字段一一对应）
 
-### 38.6 MacNotesSource 改动
+### 38.4 TaskManager — 线程池 + 取消机制（详见 38.26）
+
+- 模块级单例，`get_instance()` 懒加载
+- 线程池 `settings.ZRAG_INGEST_EXECUTOR` 注入
+- 核心方法：`create_task()`、`submit()`、`_run()`、`_cleanup()`
+- 取消: `threading.Event` 纳秒级检查，每篇文档处理前 `is_set()`
+
+### 38.5 Pipeline 改动（详见 38.23）
+
+- `run()` 新增 `on_document_done` 和 `should_cancel` 回调参数
+- 移除 `on_progress` + `ProgressEvent`
+- 每篇文档处理前检查取消信号
+- 每篇完成后触发 `on_document_done`
+
+### 38.6 MacNotesSource 改动（详见 38.15）
 
 - 原有 `osascript` 子进程调用移除
 - `fetch_batch()` 改为轮询 `result.json`（2s 间隔），阻塞等待导出完成
@@ -664,7 +694,7 @@ class MacNotesSource(DocumentSource):
         if result.get("status") != "ok":
             raise RuntimeError(f"导出失败: {result.get('message', '')}")
 
-        self._total = result["total"]
+        self._total = result["success"]
 
         # 阶段 2: 逐篇 yield
         for filepath in sorted(Path(self._export_dir).glob("*.json")):
@@ -673,14 +703,11 @@ class MacNotesSource(DocumentSource):
             with open(filepath) as f:
                 note = json.load(f)
             yield RawDocument(
-                source_id=note["id"],
-                source_type=self.source_type,
+                source_id=note["source_id"],
+                source_type=note["source_type"],
                 content=note["content"],
-                content_hash="",  # Pipeline 填入
-                metadata={
-                    "folder": note.get("folder", ""),
-                    "name": note.get("name", ""),
-                },
+                content_hash=note["content_hash"],
+                metadata=note["metadata"],
             )
 ```
 
@@ -747,47 +774,16 @@ def run(
     return report
 ```
 
-#### 异步摄入执行函数
-
-```python
-# zrag/api/task_manager.py (补充)
-import shutil
-
-def _run_ingest_task(task: IngestTask, source_type: str, full: bool):
-    """在线程池中执行的摄入任务"""
-    task.status = TaskStatus.EXPORTING
-    export_dir = f"data/pro/export/{task.id}"
-
-    if source_type == "mac_notes":
-        source = MacNotesSource(task_id=task.id)
-    else:
-        # 其他 source 直接创建，跳过 EXPORTING
-        pass
-
-    task.status = TaskStatus.INGESTING
-    pipeline = IngestionPipeline(...)
-    try:
-        report = pipeline.run(source=source, full=full, task=task)
-        task.status = TaskStatus.DONE
-    except Exception:
-        task.status = TaskStatus.ERROR
-
-    # 清理（独立线程）
-    if os.path.exists(export_dir):
-        threading.Thread(target=lambda: shutil.rmtree(export_dir)).start()
-```
-
 #### 导出脚本 manifest.json 格式
 
 ```json
 {
-    "task_id": "abc123-def456",
-    "source_type": "mac_notes",
-    "task_type": "incr",
-    "exported_at": "2026-06-09T10:00:00",
-    "processed_docs": [
-        {"source_id": "xxx", "content_hash": "abc...", "imported_at": "..."}
-    ]
+  "task_id": "abc-123-def",
+  "source_type": "mac_notes",
+  "processed_docs": [
+    {"source_id": "note-1", "content_hash": "sha256..."},
+    {"source_id": "note-2", "content_hash": "sha256..."}
+  ]
 }
 ```
 
@@ -796,6 +792,797 @@ def _run_ingest_task(task: IngestTask, source_type: str, full: bool):
 ```
 data/pro/export/<task_id>/
   ├── manifest.json         # 后端写入
-  ├── result.json           # 导出脚本写入 {"status":"ok","total":128}
-  └── <note_id>.json        # 单条笔记 {"id","name","folder","content"}
+  ├── result.json           # 导出脚本写入 {"status":"ok","task_id":"abc-123-def","expected":128,"success":128,"exported_at":"2026-06-09T10:30:00+08:00"}
+  └── <note_id>.json        # 单条笔记 {"source_id","source_type","content","content_hash","metadata"}
+```
+
+### 38.11 result.json 文件结构设计
+
+**日期**: 2026-06-09
+
+经过多轮讨论，最终确定 result.json 只做汇总统计，不包含逐条元信息和错误列表。
+
+**result.json 最终格式**:
+
+```json
+{
+  "status": "ok",
+  "task_id": "abc-123-def",
+  "expected": 150,
+  "success": 128,
+  "exported_at": "2026-06-09T10:30:00+08:00"
+}
+```
+
+**字段说明**:
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `status` | string | `"ok"` 表示导出完成。脚本异常退出时不生成此文件 |
+| `task_id` | string | 与后端创建的任务 ID 对应，用于关联 |
+| `expected` | int | 本次导出计划导出的笔记数量 |
+| `success` | int | 最终成功写入文件的数量 |
+| `exported_at` | string | 导出完成时间，ISO 8601 格式，含时区 |
+
+**设计决策要点**:
+
+1. **不包含逐条元信息**：每条笔记的元信息（note_id、title、folder、content_hash）保存在对应 `<note_id>.json` 文件中，result.json 只做汇总统计
+2. **不包含错误列表**：导出失败的笔记直接跳过，不在 result.json 中单独记录。通过 `expected - success` 的差值即可判断是否有笔记导出失败
+3. **`expected` 和 `success` 两个字段**：
+   - `expected`：计划导出数（本次应该导出的数量）
+   - `success`：成功导出数（最终成功写入文件的数量）
+   - `expected - success` = 导出失败被跳过的数量
+4. **`expected` 覆盖全量与增量两种模式**：
+   - 全量模式：所有笔记数量
+   - 增量模式：本次变更的笔记数量（无变更时 `expected=0` 且 `success=0`，视为正常完成）
+5. **异常退出不生成 result.json**：导出脚本异常退出时不写入 result.json，容器侧通过文件不存在来感知失败
+
+### 38.12 单条笔记 JSON 文件结构设计
+
+**日期**: 2026-06-09
+
+#### 讨论背景
+
+在 38.10 中，单条笔记文件 `<note_id>.json` 的初始结构为：
+
+```json
+{
+  "id": "x-coredata://...",
+  "name": "笔记标题",
+  "folder": "所属文件夹名",
+  "content": "# 标题\n\nMarkdown 正文..."
+}
+```
+
+该结构是一个独立设计的格式，与项目中已有的 RawDocument 数据模型（见 Q5）不一致。这意味着容器侧的 MacNotesSource 在读取每个 JSON 文件后，需要手动进行字段映射（如 `note["id"]` → `RawDocument.source_id`、拼接 metadata 等），增加了不必要的转换逻辑。
+
+**用户要求**：按照 RawDocument 对象的设计来补充 JSON 结构，使导出脚本产出的 JSON 与容器侧 RawDocument 的反序列化直接对应，消除手动映射层。
+
+#### 讨论迭代
+
+1. **对齐 RawDocument 字段**：RawDocument 包含 5 个字段——`source_id`、`source_type`、`content`、`content_hash`、`metadata`。单条笔记 JSON 应直接沿用这 5 个字段，让 MacNotesSource 可以逐字段赋值，无需翻译。
+2. **content 格式确认**：`content` 为 Markdown 格式。Notes.app 的 `body of theNote` 返回 Apple 内部富文本格式，由导出脚本的 `_html_to_markdown()` 负责转换为 Markdown。容器侧不再执行 HTML 解析。
+3. **metadata 保留但暂为空**：`metadata` 字段保留（类型为 map/dict），当前内容为 `{}`。原先独立存储的 `name`（笔记标题）和 `folder`（所属文件夹）不单独作为顶层字段，后续如有需要可放入 metadata 中扩展。
+4. **content_hash 由导出脚本预计算**：原先 content_hash 由 Pipeline 在处理时计算（见 38.10 代码中 `content_hash=""` 的注释），改为导出脚本在写入 JSON 文件时预计算 SHA256 并填入。容器侧直接读取，避免重复 I/O。
+
+#### 最终结构
+
+单条笔记 JSON 文件（`<note_id>.json`）结构：
+
+```json
+{
+  "source_id": "note-uuid-xxxx",
+  "source_type": "mac_notes",
+  "content": "Markdown正文...",
+  "content_hash": "sha256...",
+  "metadata": {}
+}
+```
+
+#### 字段说明
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `source_id` | string | Apple Notes 的 note_id（UUID），对应 RawDocument.source_id |
+| `source_type` | string | 固定为 `"mac_notes"`，对应 RawDocument.source_type |
+| `content` | string | 笔记正文，Markdown 格式。由导出脚本负责 HTML→Markdown 转换 |
+| `content_hash` | string | SHA256 哈希值，由导出脚本在导出时预计算，对应 RawDocument.content_hash |
+| `metadata` | dict | 保留字段，当前内容为空 `{}`，后续可扩展（如追加 title、folder、tags 等） |
+
+#### 设计要点
+
+- **与 RawDocument 一一对应**：容器侧 MacNotesSource 读取 JSON 后可直接构造 RawDocument 对象，无需额外字段翻译或拼接。例如：`RawDocument(source_id=note["source_id"], source_type=note["source_type"], content=note["content"], content_hash=note["content_hash"], metadata=note["metadata"])`
+- **content_hash 预计算**：导出脚本在生成 JSON 时一并计算 SHA256 并填入，容器侧 Pipeline 无需再次读取 content 计算 hash，减少容器侧 I/O 开销
+- **metadata 为空对象**：当前不存储 name、folder 等字段，但保留 `{}` 占位，为后续扩展预留空间（如新增 tags、created_at、modified_at 等维度）
+- **name 和 folder 暂不单独存储**：这些信息当前在摄入流程中未被使用（分块、向量化、检索均不依赖笔记标题或文件夹名），避免在 JSON 中引入冗余字段。后续如有需要，可加入 metadata
+
+### 38.13 manifest.json 文件结构设计
+
+**日期**: 2026-06-09
+
+#### 讨论背景
+
+manifest.json 是文件桥接方案中由后端在创建摄入任务时写入的配置文件，导出脚本通过读取它来确定本次导出的范围（全量还是增量、变更了哪些笔记）。
+
+#### 讨论过程
+
+**初始方案**包含 `task_type` 字段区分全量/增量：
+
+```json
+{
+  "task_id": "...",
+  "task_type": "full",
+  "source_type": "mac_notes",
+  "processed_docs": []
+}
+```
+
+**讨论迭代**：用户质疑 `task_type` 字段是否有存在的必要。分析发现 `processed_docs` 本身已隐含全量/增量的语义——为空数组即全量模式，非空即增量模式。`task_type` 是冗余字段，移除。
+
+同时确认 `processed_docs` 中的 `source_id` + `content_hash` 足以让导出脚本完成增量判断：
+1. `source_id` 不在 processed_docs 中 → 新笔记 → 导出
+2. `source_id` 在但 `content_hash` 不同 → 内容变更 → 导出
+3. `source_id` 在且 `content_hash` 一致 → 跳过
+
+导出脚本仅凭这对信息即可完成增量判断，无需访问数据库。
+
+**最终格式**:
+
+```json
+{
+  "task_id": "abc-123-def",
+  "source_type": "mac_notes",
+  "processed_docs": [
+    {"source_id": "note-1", "content_hash": "sha256..."}
+  ]
+}
+```
+
+**字段说明**:
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `task_id` | string | 与 result.json 中的 task_id 对应，用于关联 |
+| `source_type` | string | 固定为 `"mac_notes"` |
+| `processed_docs` | array | 已处理文档列表。全量模式为空数组 `[]`；增量模式包含已有文档的 source_id + content_hash 记录 |
+
+processed_docs 数组项结构：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `source_id` | string | 已处理笔记的唯一标识 |
+| `content_hash` | string | SHA256 哈希值 |
+
+**设计要点**:
+
+- **后端写入，导出脚本读取**：后端从 SQLite processed_docs 表读取已有记录，序列化为 JSON 写入 manifest.json
+- **全量/增量语义由 processed_docs 承载**：空数组即全量，非空即增量。无需额外的 task_type 字段
+- **导出脚本零数据库依赖**：仅凭 manifest.json 中的 source_id + content_hash 即可完成增量比对
+- **向后兼容**：首次导入时 processed_docs 为空，等价于全量导出
+
+### 38.14 导出脚本工作流程设计
+
+**日期**: 2026-06-09
+
+#### expected 字段的语义澄清
+
+`expected` 不是 Notes.app 中的总笔记数，也不是遍历前的预估值。它是导出脚本经过 `processed_docs` 比对后"判定需要导出的笔记数量"——即在步骤 3d 中逐步累加的值。增量模式下，只有内容确实变更了（hash 不匹配或新增）的笔记才被计入 `expected`。
+
+#### 一次遍历流程
+
+导出脚本只遍历一次 Notes.app，在遍历中同时完成比对和导出，无需预处理扫描：
+
+```
+1. 读取 manifest.json → 获取 processed_docs 列表（存为内存 HashMap）
+
+2. expected = 0, success = 0
+
+3. for each note in Notes.app（一次 AppleScript 遍历）:
+   a. 获取 note_id + HTML body
+   b. 计算 content_hash = SHA256(content)
+   c. 查 processed_docs:
+      - note_id 不在表中 或 content_hash 不一致 → 需要导出
+      - 一致 → 跳过（continue）
+   d. expected += 1
+   e. HTML → Markdown 转换
+   f. 写入 <note_id>.json
+      - 成功 → success += 1
+      - 失败 → 跳过，不写文件
+
+4. 写入 result.json {status:"ok", task_id, expected, success, exported_at}
+```
+
+模式判断由 processed_docs 隐含：
+- 全量模式：`processed_docs = []`，所有笔记都判定为"需要导出"
+- 增量模式：`processed_docs` 非空，仅 hash 不匹配或新增的笔记才导出
+
+### 38.15 容器侧 MacNotesSource 文件桥接模式
+
+**日期**: 2026-06-09
+
+#### fetch_batch() 实现
+
+文件桥接模式下，`MacNotesSource.fetch_batch()` 改为两阶段工作：
+
+**阶段 1 — 轮询等待导出完成**：阻塞等待宿主机导出脚本写入 `result.json`：
+
+```python
+result_file = os.path.join(self._export_dir, "result.json")
+while not os.path.exists(result_file):
+    time.sleep(2)
+
+with open(result_file) as f:
+    result = json.load(f)
+
+if result["status"] != "ok":
+    raise IngestionException("导出脚本未正常完成")
+```
+
+**阶段 2 — 逐篇 yield RawDocument**：遍历导出目录下所有 `<note_id>.json`，跳过 manifest.json 和 result.json，逐篇构造 RawDocument：
+
+```python
+for filepath in sorted(Path(self._export_dir).glob("*.json")):
+    if filepath.name in ("manifest.json", "result.json"):
+        continue
+    with open(filepath) as f:
+        note = json.load(f)
+    yield [RawDocument(
+        source_id=note["source_id"],
+        source_type=note["source_type"],
+        content=note["content"],
+        content_hash=note["content_hash"],
+        metadata=note.get("metadata", {}),
+    )]
+```
+
+#### 设计决策
+
+**batch_size=1**：文件桥接模式下每篇笔记已是独立 JSON 文件，batch_size 固定为 1（逐篇处理）。这与 AppleScript 模式下的 batch_size=10（一次 osascript 获取 10 条）不同，但两种模式共享同一套 Pipeline（逐篇独立事务），无需做代码适配。
+
+**轮询不设超时**：容器侧等待 `result.json` 的循环不设硬超时。原因是导入操作本质上是一个"异步任务"：用户在前端点击"开始导入"后，需要手动在终端执行导出脚本。导出时间取决于笔记数量和系统性能，无法预设合理上限。取而代之的方案是通过任务管理机制——如果用户想中止等待中的导入任务，可以通过 task_id 取消任务，轮询循环检测到取消信号后终止。
+
+### 38.16 摄入任务状态与取消机制
+
+**日期**: 2026-06-09
+
+#### 任务状态机
+
+```
+PENDING ──→ WAITING_EXPORT ──→ PROCESSING ──→ DONE
+   │              │                │
+   └──────────────┼────────────────┘
+                  ▼
+             CANCELLED
+```
+
+任意非 DONE 状态都可以被取消。
+
+| 状态 | 含义 | 取消行为 |
+|------|------|---------|
+| `PENDING` | 后端已创建任务，写入 manifest.json，等待用户执行导出脚本 | 直接标记 CANCELLED，清理 manifest.json |
+| `WAITING_EXPORT` | 容器侧轮询等待 result.json | 设置取消信号，轮询循环检测到后退出 |
+| `PROCESSING` | result.json 就绪，Pipeline 开始逐篇处理 | 设置取消信号，Pipeline 在文档间检测，中断后续处理 |
+| `DONE` | 全部完成 | 不可取消 |
+| `CANCELLED` | 已被用户取消 | 终态 |
+
+#### 取消信号实现
+
+使用 `threading.Event()` 作为线程安全取消信号：
+
+```python
+class IngestTask:
+    def __init__(self):
+        self._cancel_event = threading.Event()
+    
+    def cancel(self):
+        self.status = CANCELLED
+        self._cancel_event.set()
+    
+    def is_cancelled(self):
+        return self._cancel_event.is_set()
+```
+
+MacNotesSource 轮询中检查（WAITING_EXPORT 阶段）：
+
+```python
+while not os.path.exists(result_file):
+    if task.is_cancelled():
+        return
+    time.sleep(2)
+```
+
+Pipeline 逐篇处理时检查（PROCESSING 阶段）：
+
+```python
+for doc in all_docs:
+    if task.is_cancelled():
+        break
+    # ... chunk → embed → store
+```
+
+#### 设计要点
+
+- `threading.Event` 是 Python 内置的线程安全布尔标志，nanosecond 级别的检查开销，无需引入额外依赖
+- 取消信号不强制中断正在处理中的文档（那会导致数据不一致），仅在文档间检查
+- 取消后任务状态持久化到 DB，前端轮询状态时更新为"已取消"
+
+### 38.17 导出目录清理策略
+
+**日期**: 2026-06-09
+
+任务结束（DONE 或 CANCELLED）后，`data/pro/export/<task_id>/` 目录不再需要，应清理以释放磁盘空间。
+
+**清理时机与方式**：
+
+- **由单独的清理线程负责**：不在 Pipeline 线程中执行清理，而是提交给一个独立的清理线程。这样 Pipeline 线程可以快速结束，不阻塞任务状态的最终更新
+- **DONE 和 CANCELLED 都需要清理**：无论任务是正常完成还是被取消，导出文件都已无用，统一清理
+- **清理操作**：`shutil.rmtree(export_dir)`，删除整个任务导出目录
+- **清理失败不影响任务结果**：如果清理失败（如权限问题），仅记录日志，不影响任务 DONE/CANCELLED 状态
+
+### 38.18 API 端点调整
+
+**日期**: 2026-06-09
+
+#### 现有端点修改
+
+`POST /v1/documents/ingest` 由同步阻塞改为异步：
+
+| | 修改前 | 修改后 |
+|------|------|------|
+| 行为 | 同步调用 `pipeline.run()`，等待全部完成后返回 | 创建任务 → 提交线程池 → 立即返回 |
+| HTTP 状态码 | `200` | `202 Accepted` |
+| 返回值 | `{total, new, updated, skipped, failed, errors}` | `{task_id, status: "PENDING"}` |
+
+所有 source_type 统一走异步，不区分 mac_notes 或其他类型。
+
+#### 新增端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/v1/ingest/{task_id}/status` | 查询任务状态和进度 |
+| POST | `/v1/ingest/{task_id}/cancel` | 取消任务 |
+
+GET /status 返回：
+```json
+{
+  "task_id": "abc-123",
+  "task_type": "full",
+  "source_type": "mac_notes",
+  "status": "PROCESSING",
+  "total": 128,
+  "processed": 45,
+  "created_at": "...",
+  "updated_at": "..."
+}
+```
+
+POST /cancel 返回当前任务状态，确认已标记为取消。
+
+### 38.19 前端交互设计
+
+**日期**: 2026-06-09
+
+#### 操作流程
+
+1. 用户先选择数据源（如"macOS 备忘录"）
+2. 用户选择全量导入或增量导入
+3. 前端调用 `POST /v1/documents/ingest` → 获得 `task_id`
+4. 对于需要宿主机导出脚本的数据源（如 mac_notes）：页面内持久性提示"请在终端执行 `python3 zrag/export_notes.py <task_id>`"
+5. 前端轮询 `GET /v1/ingest/{task_id}/status`（2s 间隔）
+6. 显示当前阶段名称 + 进度条（`processed / total`）
+7. 用户可点击"取消"按钮终止任务
+8. 任务 DONE 或 CANCELLED 时停止轮询，刷新来源列表
+
+#### 提示方式
+
+执行导出脚本的提示必须是**永久性提示**，而非页面右上角的临时 Toast 弹窗。形式为内联消息条，持久显示直到任务状态变更后才消失。这样用户不会因 Toast 自动消失而错过操作指引。
+
+#### 进度展示
+
+同时展示两个维度的进度信息：
+- **阶段名称**：如"等待导出..."、"正在处理（45/128）"、"处理完成"
+- **进度条**：可视化 `processed / total` 比例
+
+#### 页面布局
+
+```
+┌──────────────────────────────────────────────────────┐
+│  NavBar                                              │
+├──────────────────────────────────────────────────────┤
+│  知识库来源                                          │
+│  ┌─────────────────────┐ ┌──────────┐ ┌──────────┐  │
+│  │ 数据源: macOS备忘录 ▾│ │ 增量摄入 │ │ 全量摄入 │  │
+│  └─────────────────────┘ └──────────┘ └──────────┘  │
+│                                                      │
+│  ┌────────────────────────────────────────────────┐  │
+│  │ ⚠️ 请在终端执行:                               ✕ │  │
+│  │    python3 zrag/export_notes.py abc-123         │  │
+│  │                              [📋 复制]          │  │
+│  └────────────────────────────────────────────────┘  │
+│                                                      │
+│  正在处理（45/128）                    [取消]        │
+│  ████████████████░░░░░░░░░░░░░░░░░░░░░  35%         │
+│                                                      │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐          │
+│  │ mac_notes│  │          │  │          │          │
+│  └──────────┘  └──────────┘  └──────────┘          │
+└──────────────────────────────────────────────────────┘
+```
+
+#### 三个交互状态
+
+**状态 1 — 等待导出（WAITING_EXPORT）**：
+- 阶段名："等待导出笔记..."
+- 进度条：indeterminate 动画（无 total，无法确定进度）
+- 提示区：显示导出命令 + 复制按钮
+
+**状态 2 — 处理中（PROCESSING）**：
+- 阶段名："正在处理（45/128）"
+- 进度条：确定进度，百分比
+- 提示区：隐藏
+- 取消按钮：可用
+
+**状态 3 — 完成（DONE）**：
+- 提示区、进度区、阶段名：全部隐藏
+- Toast：摄入概要（新增/更新/跳过数量）
+- 来源列表：自动刷新
+
+**状态 4 — 取消/失败（CANCELLED/FAILED）**：
+- 提示区、进度区、阶段名：全部隐藏
+- Toast：取消确认或错误信息
+
+### 38.20 线程池配置
+
+**日期**: 2026-06-09
+
+```python
+# config/ingest.yaml
+task_pool_size: 2
+
+# zrag/settings.py
+from concurrent.futures import ThreadPoolExecutor
+ZRAG_INGEST_EXECUTOR = ThreadPoolExecutor(max_workers=ingest_cfg["task_pool_size"])
+```
+
+`max_workers=2`：个人使用场景下最多同时运行一个摄入任务，2 个 worker 覆盖"一个运行中任务 + 一个清理线程"。
+
+### 38.21 MacNotesSource 模式
+
+**日期**: 2026-06-09
+
+只实现文件桥接模式，移除 AppleScript/osascript 直接调用代码。`MacNotesSource.fetch_batch()` 统一为轮询 `result.json` + 逐篇读取 `<note_id>.json` 的实现。
+
+### 38.22 导出脚本（export_notes.py）
+
+**日期**: 2026-06-09
+
+脚本运行在宿主机（macOS）上，由用户在终端手动执行：`python3 zrag/export_notes.py <task_id>`。不打包进容器镜像。
+
+核心流程：
+1. 读取 `manifest.json`，构建 `{source_id: content_hash}` HashMap
+2. 通过 AppleScript 调用 Notes.app，遍历所有笔记
+3. 增量比对：`note_id` 不在 HashMap 中或 `content_hash` 不一致则需导出
+4. HTML → Markdown（纯正则，零外部依赖）
+5. 写入 `<note_id>.json`
+6. 写入 `result.json`
+
+日志要求：
+- 关键节点必须有屏幕打印日志（`print()`）：
+  - 开始导出：`"开始导出，计划导出 {expected} 条笔记"`
+  - 每条笔记导出：`"[{n}/{total}] {note_title}"`
+  - 完成：`"导出完成。成功 {success} 条"`
+- 任何异常必须记录：单条笔记失败打印 `"[WARN] 笔记 {note_id} 导出失败: {error}"`，致命异常打印完整 traceback
+
+### 38.23 IngestionPipeline 改动
+
+**日期**: 2026-06-09
+
+#### 取消信号检查
+
+`run()` 新增 `should_cancel` 可选回调参数。Pipeline 在每篇文档处理开始前检查取消信号，返回 True 时中断后续处理：
+
+```python
+def run(self, source, full=False, on_document_done=None, should_cancel=None) -> IngestReport:
+    for doc in all_docs:
+        if should_cancel and should_cancel():
+            break
+        # ... chunk → embed → store
+```
+
+取消信号不强制中断正在处理的文档（那会导致数据不一致），仅在文档间检查。
+
+#### full 参数保留
+
+文件桥接模式下导出脚本已完成增量比对，但 Pipeline 内部仍通过 `full` 参数控制是否二次检查 `processed_docs` 表，作为安全冗余。
+
+#### on_progress 移除
+
+移除 `on_progress` 回调和 `ProgressEvent` 数据结构。替换为简化的 `on_document_done` 回调：每篇文档处理完成（成功或失败）后调用一次，不传参数。Pipeline 不感知 TaskManager 和 DB 细节，TaskManager 通过此回调更新 DB 中的 `processed` 计数。
+
+**设计原则**：Pipeline 只做编排，不关心进度如何被消费。进度上报和任务取消都是可选的外部关注点，通过回调解耦。
+
+### 38.24 导出脚本 tag 过滤
+
+**日期**: 2026-06-10
+
+导出脚本支持通过 `--tag` 参数按笔记标签过滤：
+
+```bash
+python3 zrag/export_notes.py <task_id>                     # 全部笔记
+python3 zrag/export_notes.py <task_id> --tag "技术笔记"     # 仅匹配标签的笔记
+```
+
+- tag 过滤只在导出脚本中实现，不涉及 manifest.json 和后端
+- `expected` 统计匹配标签的笔记数
+- 标签过滤可以与增量模式组合（先按标签过滤，再比对 processed_docs 决定是否导出）
+
+### 38.25 IngestTaskViewSet 实现
+
+**日期**: 2026-06-10
+
+基于项目已有 ViewSet 模式（`DocumentViewSet`、`ConversationViewSet`），新增任务管理 ViewSet：
+
+```python
+class IngestTaskViewSet(viewsets.ViewSet):
+    authentication_classes = [APIKeyAuthentication]
+
+    def status(self, request, task_id=None):
+        """GET /v1/ingest/{task_id}/status"""
+        manager = TaskManager.get_instance()
+        task = manager.get_task(task_id)
+        if task is None:
+            return APIResponse(data=None, message="task not found", http_status=404)
+        return APIResponse(data=manager.to_dict(task))
+
+    def cancel(self, request, task_id=None):
+        """POST /v1/ingest/{task_id}/cancel"""
+        manager = TaskManager.get_instance()
+        task = manager.get_task(task_id)
+        if task is None:
+            return APIResponse(data=None, message="task not found", http_status=404)
+        manager.cancel_task(task_id)
+        return APIResponse(data=manager.to_dict(task))
+```
+
+路由注册（`zrag/api/urls.py`）：
+
+```python
+task_urls = [
+    re_path(r'^v1/ingest/(?P<task_id>[^/]+)/status$',
+        IngestTaskViewSet.as_view({'get': 'status'})),
+    re_path(r'^v1/ingest/(?P<task_id>[^/]+)/cancel$',
+        IngestTaskViewSet.as_view({'post': 'cancel'})),
+]
+```
+
+`manager.to_dict(task)` 返回结构：
+
+```json
+{
+    "task_id": "abc-123",
+    "task_type": "full",
+    "status": "PROCESSING",
+    "total": 128,
+    "processed": 45,
+    "created_at": "2026-06-10T...",
+    "updated_at": "2026-06-10T..."
+}
+```
+
+### 38.26 TaskManager 核心实现
+
+**日期**: 2026-06-10
+
+TaskManager 作为模块级单例，统一管理摄入任务的生命周期。
+
+```python
+class TaskManager:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls) -> "TaskManager":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        from django.conf import settings
+        self._executor = settings.ZRAG_INGEST_EXECUTOR
+        self._tasks: dict[str, IngestTask] = {}
+        self._events: dict[str, threading.Event] = {}
+
+    def create_task(self, task_type: str) -> IngestTask:
+        """创建任务并持久化"""
+        now = datetime.utcnow().isoformat()
+        task = IngestTask(
+            id=str(uuid.uuid4()),
+            task_type=task_type,
+            status=TaskStatus.PENDING,
+            created_at=now,
+            updated_at=now,
+        )
+        self._write_manifest(task)
+        self._upsert_task_db(task)
+        self._tasks[task.id] = task
+        self._events[task.id] = threading.Event()
+        return task
+
+    def submit(self, task: IngestTask, pipeline, source, full: bool):
+        """提交任务到线程池"""
+        task.status = TaskStatus.WAITING_EXPORT
+        self._executor.submit(self._run, task, pipeline, source, full)
+
+    def cancel_task(self, task_id: str):
+        """标记取消"""
+        task = self._tasks.get(task_id)
+        if task:
+            task.status = TaskStatus.CANCELLED
+            self._events[task_id].set()
+
+    def get_task(self, task_id: str) -> IngestTask | None:
+        return self._tasks.get(task_id)
+
+    def to_dict(self, task: IngestTask) -> dict:
+        return {
+            "task_id": task.id,
+            "task_type": task.task_type,
+            "status": task.status.value,
+            "total": task.total,
+            "processed": task.processed,
+            "created_at": task.created_at,
+            "updated_at": task.updated_at,
+        }
+
+    def _run(self, task, pipeline, source, full):
+        try:
+            task.status = TaskStatus.PROCESSING
+            report = pipeline.run(
+                source=source,
+                full=full,
+                on_document_done=lambda: self._on_document_done(task),
+                should_cancel=lambda: self._events[task.id].is_set(),
+            )
+            task.status = TaskStatus.DONE
+        except Exception:
+            if self._events[task.id].is_set():
+                task.status = TaskStatus.CANCELLED
+            else:
+                task.status = TaskStatus.FAILED
+        finally:
+            self._cleanup(task)
+
+    def _cleanup(self, task: IngestTask):
+        export_dir = os.path.join(settings.BASE_DIR, "data", "pro", "export", task.id)
+        self._executor.submit(self._do_cleanup, export_dir)
+
+    def _do_cleanup(self, export_dir: str):
+        try:
+            shutil.rmtree(export_dir)
+        except Exception:
+            logger.exception("清理导出目录失败: %s", export_dir)
+
+    def _on_document_done(self, task: IngestTask):
+        task.processed += 1
+        task.updated_at = datetime.utcnow().isoformat()
+        self._upsert_task_db(task)
+```
+
+调用方（views.py）：
+
+```python
+manager = TaskManager.get_instance()
+task = manager.create_task(task_type="full", source_type="mac_notes")
+manager.submit(task, pipeline, source, full)
+return APIResponse(data={"task_id": task.id, "status": task.status}, http_status=202)
+```
+
+设计要点：
+- `_cleanup` 向线程池提交清理任务，不阻塞 Pipeline 线程
+- 清理失败只记录日志，不影响任务终态
+- `ThreadPoolExecutor` 通过 Django settings 注入，统一管理线程资源
+
+### 38.27 前端 API 层改动
+
+**日期**: 2026-06-10
+
+`frontend/src/api/endpoints.js` 新增两个端点函数，`ingestDocuments` 透传后端响应不变：
+
+```javascript
+export const ingestDocuments = (body) => apiPost('/v1/documents/ingest', body)  // 返回 {task_id, status}
+export const getTaskStatus = (taskId) => apiGet(`/v1/ingest/${taskId}/status`)
+export const cancelIngestTask = (taskId) => apiPost(`/v1/ingest/${taskId}/cancel`)
+```
+
+### 38.28 数据源可用列表端点
+
+**日期**: 2026-06-10
+
+新增 `GET /v1/sources/available` 返回 SOURCE_REGISTRY 中已注册的数据源 key 列表，供前端下拉选择器使用。
+
+views.py（DocumentViewSet）:
+
+```python
+def list_available_sources(self, request):
+    return APIResponse(
+        data={"sources": list(SOURCE_REGISTRY.keys())},
+        request=request,
+    )
+```
+
+urls.py:
+
+```python
+re_path(r'^v1/sources/available$',
+    DocumentViewSet.as_view({'get': 'list_available_sources'})),
+```
+
+### 38.29 轮询完成后的统计展示
+
+**日期**: 2026-06-10
+
+前端 DONE 时不展示详细的 ingest 统计（new/updated/skipped/failed），仅显示"摄入完成，共处理 N 篇"。详细统计信息可通过 swagger 或日志查看。
+
+### 38.30 轮询错误处理
+
+**日期**: 2026-06-10
+
+轮询 `GET /v1/ingest/{task_id}/status` 过程中的网络错误不停止轮询，而是持续重试直至任务到达终态或被用户取消。失败期间显示"连接中断，重试中..."提示，恢复后自动消失。
+
+### 38.31 跨页面状态恢复
+
+**日期**: 2026-06-10
+
+用户离开 SourcesView（切换页面/刷新）后，后端任务仍在运行。使用 `sessionStorage` 存储活跃 `taskId`，页面挂载时自动恢复轮询：
+
+- 发起导入 → `sessionStorage.setItem('activeIngestTask', taskId)`
+- 轮询中发现终态 → `sessionStorage.removeItem('activeIngestTask')`
+- 页面 `onMounted` 时 → 读取 sessionStorage，存在则调用 `startPolling(taskId)` 恢复轮询
+
+`sessionStorage` 仅在当前标签页存活，关闭标签页后自动清除，无需手动管理。
+
+### 38.32 按钮状态约束
+
+**日期**: 2026-06-10
+
+- 未选数据源时，"增量摄入"和"全量摄入"按钮均禁用
+- `ingesting` 期间，数据源下拉选择器 + 两个摄入按钮均禁用
+
+### 38.33 取消操作前端流程
+
+**日期**: 2026-06-10
+
+```
+[取消] 按钮点击
+  → 按钮变为 "取消中..." + disabled（防二次点击）
+  → cancelIngestTask(taskId) API 调用
+  → 后端 TaskManager.cancel_task → event.set() + status = CANCELLED
+  → 下一次轮询（2s内）检测到 status === 'CANCELLED'
+  → 停止轮询，隐藏进度区和提示区
+  → sessionStorage.removeItem('activeIngestTask')
+```
+
+取消 API 调用失败时，恢复"取消"按钮可用，让用户重试。
+
+### 38.34 抽象类父类型检查
+
+**日期**: 2026-06-10
+
+依据 `.claude/rules/python-code-style.md` 中"抽象类的父类型检查机制"，通过依赖注入接收抽象类实例的功能逻辑，必须在**使用前**检查该实例是否继承了指定的抽象类。不通过则抛出异常终止流程。
+
+需要添加检查的位置：
+
+| 文件 | 位置 | 需检查的抽象类 |
+|------|------|--------------|
+| `zrag/ingest/pipeline.py` | `IngestionPipeline.__init__` | `EmbeddingModel`（embedder）、`ChunkingStrategy`（chunker） |
+| `zrag/ingest/pipeline.py` | `IngestionPipeline.run()` | `DocumentSource`（source） |
+| `zrag/retrieval/retriever.py` | `Retriever.__init__` | `EmbeddingModel`（embedder） |
+| `zrag/api/views.py` | `ConversationViewSet._get_llm()` | `LLMProvider`（llm_provider） |
+
+检查模板：
+
+```python
+if not isinstance(embedder, EmbeddingModel):
+    raise TypeError(
+        f"embedder 必须是 EmbeddingModel 的子类，实际类型: {type(embedder).__name__}"
+    )
 ```

@@ -26,9 +26,21 @@
           </p>
         </div>
         <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
+          <!-- 数据源选择器 -->
+          <select
+            v-model="selectedSource"
+            :disabled="ingesting"
+            class="inline-flex items-center px-3 py-2 text-sm border border-gray-300 dark:border-gray-600
+                   rounded-md bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200
+                   focus:outline-none focus:ring-2 focus:ring-blue-500"
+            data-testid="source-selector"
+          >
+            <option value="" disabled>选择数据源</option>
+            <option v-for="s in availableSources" :key="s" :value="s">{{ s }}</option>
+          </select>
           <button
             type="button"
-            :disabled="ingesting"
+            :disabled="ingesting || !selectedSource"
             class="inline-flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 text-sm font-medium
                    text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800
                    border border-gray-300 dark:border-gray-600
@@ -46,7 +58,7 @@
           </button>
           <button
             type="button"
-            :disabled="ingesting"
+            :disabled="ingesting || !selectedSource"
             class="inline-flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 text-sm font-medium
                    text-white bg-blue-600 hover:bg-blue-700
                    rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500
@@ -63,15 +75,69 @@
         </div>
       </header>
 
-      <!-- 摄入进度条 (indeterminate) -->
+      <!-- 导出提示区 (macOS Notes 专用) -->
+      <div
+        v-if="showExportHint && taskId"
+        class="mb-6 p-4 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20"
+        data-testid="export-hint"
+      >
+        <div class="flex items-start justify-between gap-2">
+          <div class="flex-1">
+            <p class="text-sm font-medium text-amber-800 dark:text-amber-200">
+              ⚠️ 请在终端执行以下命令导出笔记
+            </p>
+            <pre class="mt-2 p-2 rounded bg-amber-100 dark:bg-amber-900/40 text-sm text-amber-900 dark:text-amber-100 overflow-x-auto">python3 export_notes.py {{ taskId }}</pre>
+          </div>
+          <button
+            type="button"
+            class="shrink-0 p-1.5 rounded text-amber-600 hover:text-amber-800 hover:bg-amber-100 dark:hover:bg-amber-800/50 transition-colors"
+            title="复制命令"
+            @click="copyCommand"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 进度区 -->
       <div
         v-if="ingesting"
-        class="mb-6 h-1.5 w-full bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden"
+        class="mb-6 p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
         data-testid="ingest-progress"
-        role="progressbar"
-        aria-label="摄入进行中"
       >
-        <div class="h-full w-1/3 bg-blue-600 dark:bg-blue-500 animate-pulse rounded-full"></div>
+        <div class="mb-2">
+          <span v-if="taskId" class="text-xs text-gray-400 dark:text-gray-500 block mb-1">
+            任务: {{ taskId }}
+          </span>
+          <div class="flex items-center justify-between">
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+              {{ statusText }}
+            </span>
+          <button
+            type="button"
+            :disabled="cancelLoading"
+            class="text-xs font-medium text-red-600 hover:text-red-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            @click="handleCancel"
+          >
+            {{ cancelLoading ? '取消中...' : '取消' }}
+          </button>
+          </div>
+        </div>
+        <div class="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+          <!-- 确定进度条：根据 processed/total 显示百分比 -->
+          <div
+            v-if="isDeterminate"
+            class="h-full rounded-full bg-blue-600 transition-all duration-500 ease-out"
+            :style="{ width: (processed / total * 100) + '%' }"
+          ></div>
+          <!-- 不确定进度条：pending / waiting / processing 但 total 为 0 时显示 -->
+          <div
+            v-else-if="isIndeterminate"
+            class="progress-bar-indeterminate"
+          ></div>
+        </div>
       </div>
 
       <!-- 加载状态: 骨架屏 -->
@@ -179,29 +245,37 @@
  * - 空状态显示引导文案
  * - 顶部嵌入 NavBar 组件, 支持暗黑模式
  */
-import { ref, onMounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import NavBar from '../components/NavBar.vue'
-import { listSources, ingestDocuments } from '../api/endpoints.js'
+import { listSources } from '../api/endpoints.js'
 import { getUserMessage } from '../api/index.js'
 import { useToast } from '../composables/useToast.js'
+import { useIngest } from '../composables/useIngest.js'
+import { useAvailableSources } from '../composables/useAvailableSources.js'
 import { formatRelativeTime } from '../utils/time.js'
 
 const toast = useToast()
+const {
+  taskId, taskStatus, total, processed,
+  ingesting, cancelLoading,
+  statusText, isIndeterminate, isDeterminate,
+  startIngest, cancelTask, restoreActiveTask,
+  dispose,
+} = useIngest()
+const { availableSources, loadAvailableSources } = useAvailableSources()
+/** 导出提示显隐控制（macOS Notes 专用） */
+const showExportHint = ref(false)
 
 /** 来源列表数据, 每项包含 source_type, doc_count, last_imported */
 const sources = ref([])
 /** 列表加载状态, true 时显示骨架屏 */
 const loading = ref(false)
-/** 摄入操作进行中状态, true 时显示进度条与禁用按钮 */
-const ingesting = ref(false)
-/** 最近一次摄入报告, 用于在 Toast 中展示处理/新增/跳过/失败数 */
-const lastReport = ref(null)
+/** 选中的数据源 */
+const selectedSource = ref('')
+
 
 /**
  * 将后端返回的来源数据规范为数组
- * - 直接是数组: 原样返回
- * - 包含 items 字段: 返回 items
- * - 其它: 返回空数组
  *
  * @param {*} data - 后端响应
  * @returns {Array} 规范化的来源列表
@@ -214,8 +288,6 @@ function normalizeSources(data) {
 
 /**
  * 加载来源列表
- * - 设置 loading 标志以触发骨架屏
- * - 异常时使用全局 toast.error 反馈
  *
  * @returns {Promise<void>}
  */
@@ -232,34 +304,85 @@ async function loadSources() {
 
 /**
  * 触发摄入操作
- * 1. 设置 ingesting 标志显示进度条
- * 2. 调用 ingestDocuments 接口 (source_type: null 表示全部来源)
- * 3. 完成后重新拉取列表并展示报告
- * 4. 失败时显示错误 Toast
  *
  * @param {boolean} full - 是否全量摄入
  * @returns {Promise<void>}
  */
 async function handleIngest(full) {
-  if (ingesting.value) return
-  ingesting.value = true
-  lastReport.value = null
+  if (!selectedSource.value || ingesting.value) return
   const actionLabel = full ? '全量摄入' : '增量摄入'
   try {
-    const report = await ingestDocuments({ source_type: null, full })
-    lastReport.value = report || {}
-    toast.success(`${actionLabel}完成`)
-    // 摄入成功后重新拉取来源列表
-    await loadSources()
+    await startIngest(selectedSource.value, full)
+    showExportHint.value = true
   } catch (err) {
     toast.error(`${actionLabel}失败: ${getUserMessage(err)}`)
-  } finally {
-    ingesting.value = false
   }
 }
 
-/** 组件挂载时加载来源列表 */
+/** 取消任务 */
+async function handleCancel() {
+  try {
+    await cancelTask()
+  } catch {
+    toast.error('取消失败，请重试')
+  }
+}
+
+/** 复制导出命令 */
+async function copyCommand() {
+  try {
+    await navigator.clipboard.writeText(`python3 export_notes.py ${taskId.value}`)
+    toast.success('命令已复制')
+  } catch {
+    toast.error('复制失败')
+  }
+}
+
+// 监听任务状态变化
+watch(taskStatus, (status) => {
+  if (['done', 'cancelled', 'failed'].includes(status)) {
+    showExportHint.value = false
+  }
+  if (status === 'done') {
+    toast.success(total.value > 0 ? `摄入完成，共处理 ${total.value} 篇` : '摄入完成')
+    loadSources()
+  } else if (status === 'cancelled') {
+    toast.success('摄入已取消')
+  } else if (status === 'failed') {
+    toast.error('摄入异常终止')
+  }
+})
+
 onMounted(() => {
   loadSources()
+  loadAvailableSources()
+  restoreActiveTask()
+})
+
+onUnmounted(() => {
+  dispose()
 })
 </script>
+
+<style scoped>
+/**
+ * 不确定进度条动画
+ *
+ * 用于 pending / waiting / processing 但 total 为 0 时的进度显示。
+ * 使用蓝白渐变背景从左到右连续移动，表示任务正在进行中。
+ */
+@keyframes progress-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.progress-bar-indeterminate {
+  height: 100%;
+  background: linear-gradient(90deg, transparent, #3b82f6, transparent);
+  animation: progress-indeterminate 1.5s ease-in-out infinite;
+}
+</style>

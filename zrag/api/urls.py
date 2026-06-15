@@ -4,7 +4,11 @@
 """
 from django.urls import re_path
 
-from zrag.api.views import ConversationViewSet, DocumentViewSet
+from zrag.api.views import (
+    ConversationViewSet,
+    DocumentViewSet,
+    IngestTaskViewSet,
+)
 from zrag.api.health import HealthViewSet
 
 conversation_urls = [
@@ -28,6 +32,21 @@ document_urls = [
 
 source_urls = [
     re_path(r'^v1/sources$', DocumentViewSet.as_view({'get': 'list_sources'})),
+    re_path(
+        r'^v1/sources/available$',
+        DocumentViewSet.as_view({'get': 'list_available_sources'}),
+    ),
+]
+
+task_urls = [
+    re_path(
+        r'^v1/ingest/(?P<task_id>[^/]+)/status$',
+        IngestTaskViewSet.as_view({'get': 'status'}),
+    ),
+    re_path(
+        r'^v1/ingest/(?P<task_id>[^/]+)/cancel$',
+        IngestTaskViewSet.as_view({'post': 'cancel'}),
+    ),
 ]
 
 health_urls = [
@@ -35,4 +54,4 @@ health_urls = [
     re_path(r'^v1/health/ready$', HealthViewSet.as_view({'get': 'ready'})),
 ]
 
-urlpatterns = conversation_urls + document_urls + source_urls + health_urls
+urlpatterns = conversation_urls + document_urls + source_urls + task_urls + health_urls

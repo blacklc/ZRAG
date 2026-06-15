@@ -65,7 +65,7 @@ services:
     volumes:
       - ./data/pro:/app/data
       - /Users/lichen/Documents/workspace/models:/app/models:ro
-      - ./logs/pro:/app/log
+      - ./logs/pro:/app/logs
     environment:
       - LLM_GATEWAY_URL=${LLM_GATEWAY_URL:-http://host.docker.internal:4000/v1}
       - LLM_GATEWAY_MODEL=${LLM_GATEWAY_MODEL:-smart-router}
@@ -94,4 +94,4 @@ services:
       resources:
         limits:
           memory: 768M
-          cpus: "2"
+          cpus: "8"

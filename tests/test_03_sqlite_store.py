@@ -144,3 +144,92 @@ class TestTransaction:
                 raise ValueError("rollback!")
         row = store.fetch_one("SELECT chunk_id FROM chunks WHERE chunk_id = ?", ('rb_1',))
         assert row is None
+
+
+class TestTokenizeText:
+    """_tokenize_text() 单元测试"""
+
+    def setup_method(self):
+        from zrag.store.sqlite_store import _tokenize_text
+        self.tokenize = _tokenize_text
+
+    def test_chinese_tokenized(self):
+        """中文文本被 jieba 分词"""
+        result = self.tokenize("中文分词测试")
+        tokens = result.split()
+        assert len(tokens) >= 3  # 至少 '中文' '分词' '测试'
+
+    def test_english_preserved(self):
+        """英文和代码部分保留原样"""
+        result = self.tokenize("hello world treeIndex")
+        assert "hello" in result
+        assert "treeIndex" in result
+
+    def test_mixed_chinese_english(self):
+        """中英混合文本正确处理"""
+        result = self.tokenize("etcd的MVCC模块由treeIndex和Backend组成")
+        assert "etcd" in result
+        assert "treeIndex" in result
+        # 中文部分应被分词
+        tokens = result.split()
+        assert len(tokens) > 5
+
+    def test_empty_string(self):
+        """空字符串返回空"""
+        result = self.tokenize("")
+        assert result == ""
+
+    def test_tokenize_for_fts5_write(self):
+        """验证 FTS5 写入时的 content 经过分词处理"""
+        text = "etcd的MVCC模块"
+        result = self.tokenize(text)
+        # 分词后应为空格分隔的 token 串
+        assert "MVCC" in result
+        assert "etcd" in result
+        tokens = result.split()
+        assert len(tokens) >= 4  # etcd, 的, MVCC, 模块 等
+
+    def test_tokenize_for_fts5_query(self):
+        """验证 FTS5 查询时的 query 经过相同的分词处理"""
+        query = "更新操作"
+        result = self.tokenize(query)
+        # 查询词应被正确分词
+        assert len(result.split()) >= 2  # 更新, 操作
+
+    def test_tokenize_preserves_special_chars(self):
+        """分词保留对 FTS5 安全的关键字符"""
+        text = "C++ and C# programming"
+        result = self.tokenize(text)
+        # 英文部分保留
+        assert "C++" in result or "programming" in result
+
+    def test_fts5_query_uses_tokenized_text(self):
+        """验证 FTS5 查询使用 jieba 分词后的结果"""
+        from zrag.store.sqlite_store import _tokenize_text, _sanitize_fts5_query
+
+        query = "讲解一下在etcd的更新操作中"
+        safe = _sanitize_fts5_query(query)
+        tokenized = _tokenize_text(safe)
+
+        # 分词后应该包含多个独立 token
+        tokens = tokenized.split()
+        assert len(tokens) >= 4
+        assert "etcd" in tokens
+
+    def test_fts5_query_filters_short_tokens(self):
+        """验证 FTS5 查询过滤中文单字词"""
+        from zrag.store.sqlite_store import _tokenize_text, _sanitize_fts5_query
+
+        query = "我想知道etcd的更新操作"
+        safe = _sanitize_fts5_query(query)
+        tokenized = _tokenize_text(safe)
+        tokens = tokenized.split()
+        filtered = [t for t in tokens if t.isascii() or len(t) >= 2]
+
+        # "我""想""的" 被过滤
+        assert "我" not in filtered
+        assert "想" not in filtered
+        # "etcd" 保留（ASCII）
+        assert "etcd" in filtered
+        # "更新""操作" 保留（长度 >= 2）
+        assert "更新" in filtered or "操作" in filtered

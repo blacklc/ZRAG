@@ -1,6 +1,6 @@
 """文档摄入流程编排器
 
-定义文档摄入流水线中所使用的数据类（ProgressEvent、ErrorEvent、IngestReport）
+定义文档摄入流水线中所使用的数据类（ErrorEvent、IngestReport）
 以及核心编排器 IngestionPipeline。
 
 数据流: Source -> Chunk -> Embed -> SQLite -> ChromaDB -> processed_docs
@@ -17,27 +17,6 @@ from zrag.store.sqlite_store import SQLiteStore
 from zrag.store.vector_store import ChromaStore
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ProgressEvent:
-    """摄入进度事件
-
-    用于向调用者反馈当前正在处理的文档及其所处阶段。
-
-    @param stage: 处理阶段, 取值 "source" | "chunk" | "embed" | "store"
-    @type  stage: str
-    @param source_id: 正在处理的文档标识
-    @type  source_id: str
-    @param status: 阶段状态, 取值 "start" | "done" | "skip"
-    @type  status: str
-    @param detail: 附加描述信息, defaults to ""
-    @type  detail: str, optional
-    """
-    stage: str
-    source_id: str
-    status: str
-    detail: str = ""
 
 
 @dataclass
@@ -141,6 +120,14 @@ class IngestionPipeline:
         self.chroma_store = chroma_store
         self.embedder = embedder
         self.chunker = chunker
+        if not isinstance(embedder, EmbeddingModel):
+            raise TypeError(
+                f"embedder 必须是 EmbeddingModel 的子类，实际类型: {type(embedder).__name__}"
+            )
+        if not isinstance(chunker, ChunkingStrategy):
+            raise TypeError(
+                f"chunker 必须是 ChunkingStrategy 的子类，实际类型: {type(chunker).__name__}"
+            )
         if batch_size is not None:
             self.batch_size = batch_size
         else:
@@ -153,16 +140,19 @@ class IngestionPipeline:
         self,
         source: DocumentSource,
         full: bool = False,
-        on_progress: Callable | None = None,
+        on_document_done: Callable | None = None,
+        should_cancel: Callable | None = None,
+        on_total_known: Callable[[int], None] | None = None,
     ) -> IngestReport:
         """执行摄入流程
 
         对 Source 产出的每篇文档执行以下步骤:
-          1. 检查 processed_docs（增量模式）
-          2. 跳过 hash 未变更的文档
-          3. full=True 时忽略缓存, 重新处理所有文档
-          4. Chunk -> Embed -> SQLite 事务写入 -> ChromaDB 写入 -> 更新 processed_docs
-          5. 每篇文档独立事务
+          1. 取消检查（每篇文档开始前检测）
+          2. 检查 processed_docs（增量模式）
+          3. 跳过 hash 未变更的文档
+          4. full=True 时忽略缓存, 重新处理所有文档
+          5. Chunk -> Embed -> SQLite 事务写入 -> ChromaDB 写入 -> 更新 processed_docs
+          6. 每篇文档独立事务
 
         单篇文档处理失败不会中断后续文档的处理,
         失败信息会记录到 IngestReport 的 errors 列表中。
@@ -171,26 +161,46 @@ class IngestionPipeline:
         @type  source: DocumentSource
         @param full: 是否全量导入（忽略 processed_docs 缓存）, defaults to False
         @type  full: bool, optional
-        @param on_progress: 进度回调函数, 接收 ProgressEvent 参数
-        @type  on_progress: callable, optional
+        @param on_document_done: 每篇文档处理完成后的回调（不论成败）
+        @type  on_document_done: callable, optional
+        @param should_cancel: 取消检查回调, 返回 True 时中断后续处理
+        @type  should_cancel: callable, optional
+        @param on_total_known: fetch_batch 完成后通知文档总数的回调
+        @type  on_total_known: callable, optional
 
         @return: 摄入结果报告
         @type:   IngestReport
         """
+        if not isinstance(source, DocumentSource):
+            raise TypeError(
+                f"source 必须是 DocumentSource 的子类，实际类型: {type(source).__name__}"
+            )
+        logger.info("Pipeline 开始执行, batch_size=%d, full=%s",
+                     self.batch_size, full)
+        # 将取消回调注入 Source，使轮询等待可被中断
+        if should_cancel and hasattr(source, 'should_cancel'):
+            source.should_cancel = should_cancel
         all_docs = []
         for batch in source.fetch_batch(batch_size=self.batch_size):
             all_docs.extend(batch)
 
         report = IngestReport(total=len(all_docs))
 
+        if on_total_known:
+            on_total_known(len(all_docs))
+
         for doc in all_docs:
+            # ---- 取消检查 ----
+            if should_cancel and should_cancel():
+                logger.info("摄入任务已被取消，中断后续处理")
+                break
+
             # ---- 增量/全量判断 ----
             existing = None
             if not full:
                 existing = self.sqlite_store.get_processed(doc.source_id)
                 if existing is not None and existing["content_hash"] == doc.content_hash:
                     report.skipped += 1
-                    self._emit_progress(on_progress, "source", doc.source_id, "skip")
                     continue
 
             # 判断文档是全新还是更新
@@ -198,15 +208,8 @@ class IngestionPipeline:
 
             # ---- 开始处理 ----
             try:
-                self._emit_progress(on_progress, "chunk", doc.source_id, "start")
                 chunks = self.chunker.chunk(doc)
-                self._emit_progress(on_progress, "chunk", doc.source_id, "done")
-
-                self._emit_progress(on_progress, "embed", doc.source_id, "start")
                 vectors = self.embedder.embed([c.content for c in chunks])
-                self._emit_progress(on_progress, "embed", doc.source_id, "done")
-
-                self._emit_progress(on_progress, "store", doc.source_id, "start")
 
                 # SQLite 事务: 删除旧数据 -> 写入新块 -> 提交
                 with self.sqlite_store.transaction():
@@ -228,7 +231,6 @@ class IngestionPipeline:
                         for c in chunks
                     ],
                 )
-                self._emit_progress(on_progress, "store", doc.source_id, "done")
 
                 # 更新 processed_docs
                 self.sqlite_store.upsert_processed(doc)
@@ -249,34 +251,11 @@ class IngestionPipeline:
                 report.errors.append(error_event)
                 if self._on_error:
                     self._on_error(error_event)
+            finally:
+                if on_document_done:
+                    on_document_done()
 
+        logger.info("Pipeline 执行完成 total=%d new=%d updated=%d skipped=%d failed=%d",
+                     report.total, report.new, report.updated,
+                     report.skipped, report.failed)
         return report
-
-    @staticmethod
-    def _emit_progress(
-        on_progress: Callable | None,
-        stage: str,
-        source_id: str,
-        status: str,
-        detail: str = "",
-    ) -> None:
-        """发射进度事件
-
-        @param on_progress: 进度回调函数, 若为 None 则不执行任何操作
-        @type  on_progress: callable | None
-        @param stage: 处理阶段
-        @type  stage: str
-        @param source_id: 文档标识
-        @type  source_id: str
-        @param status: 阶段状态
-        @type  status: str
-        @param detail: 附加描述信息, defaults to ""
-        @type  detail: str, optional
-        """
-        if on_progress:
-            on_progress(ProgressEvent(
-                stage=stage,
-                source_id=source_id,
-                status=status,
-                detail=detail,
-            ))

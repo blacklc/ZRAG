@@ -1,3 +1,4 @@
+"""pytest 共享 Fixture — Django 初始化"""
 import os
 import django
 

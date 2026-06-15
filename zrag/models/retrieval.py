@@ -20,6 +20,8 @@ class SearchResult:
     @type  source_type: str
     @param score: RRF 融合后的最终相关性分数
     @type  score: float
+    @param chunk_index: 分块在文档内的序号，从 0 开始，用于排序和去重
+    @type  chunk_index: int | None
     """
     chunk_id: str
     content: str
@@ -27,3 +29,4 @@ class SearchResult:
     source_id: str
     source_type: str
     score: float
+    chunk_index: int | None = None

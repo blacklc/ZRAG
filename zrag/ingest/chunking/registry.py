@@ -3,10 +3,14 @@
 from zrag.ingest.chunking.paragraph import ParagraphChunker
 from zrag.ingest.chunking.recursive import RecursiveCharacterChunker
 from zrag.ingest.chunking.composite import CompositeChunker
+from zrag.ingest.chunking.heading import HeadingChunker
 
 # 默认注册表: source_type → ChunkingStrategy
 CHUNKER_REGISTRY = {
-    "mac_notes": CompositeChunker(),
+    "mac_notes": CompositeChunker(
+        HeadingChunker(levels=[1, 2, 3], max_size=1024, min_size=200, overlap=100),
+        RecursiveCharacterChunker(max_size=1024, overlap=100)
+    ),
     "default": RecursiveCharacterChunker(),
 }
 

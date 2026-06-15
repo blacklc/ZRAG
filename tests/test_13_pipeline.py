@@ -5,7 +5,8 @@
   - 增量模式: processed_docs hash 相同则跳过
   - 全量模式: full=True 忽略缓存
   - 错误处理: 单篇失败不影响后续文档
-  - 进度回调与错误回调
+  - 文档完成回调与取消中断回调
+  - 错误回调
   - 各组件调用验证
 """
 
@@ -14,12 +15,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from zrag.embed.base import EmbeddingModel
+from zrag.ingest.chunking.base import ChunkingStrategy
 from zrag.ingest.pipeline import (
     ErrorEvent,
     IngestReport,
     IngestionPipeline,
-    ProgressEvent,
 )
+from zrag.ingest.sources.base import DocumentSource
 from zrag.models.document import Chunk, RawDocument
 
 
@@ -76,21 +79,21 @@ def _make_chunk(source_id: str, index: int, content: str) -> Chunk:
 @pytest.fixture
 def mock_source():
     """返回 mock DocumentSource"""
-    source = MagicMock()
+    source = MagicMock(spec=DocumentSource)
     return source
 
 
 @pytest.fixture
 def mock_chunker():
     """返回 mock ChunkingStrategy"""
-    chunker = MagicMock()
+    chunker = MagicMock(spec=ChunkingStrategy)
     return chunker
 
 
 @pytest.fixture
 def mock_embedder():
     """返回 mock EmbeddingModel"""
-    embedder = MagicMock()
+    embedder = MagicMock(spec=EmbeddingModel)
     return embedder
 
 
@@ -232,30 +235,65 @@ class TestIngestionPipeline:
         assert "处理 doc1 失败" in report.errors[0].error
 
     # --------------------------------------------------
-    # 5. 进度回调
+    # 5. on_document_done 回调
     # --------------------------------------------------
 
-    def test_on_progress_called(self, pipeline, mock_source, mock_chunker, mock_embedder):
-        """进度回调被调用"""
+    def test_on_document_done_called(self, pipeline, mock_source, mock_chunker, mock_embedder):
+        """on_document_done 在每篇文档处理后调用"""
         doc1 = _make_doc("doc_1", "内容一")
-        mock_source.fetch_batch.return_value = iter([[doc1]])
+        doc2 = _make_doc("doc_2", "内容二")
+        mock_source.fetch_batch.return_value = iter([[doc1, doc2]])
 
-        mock_chunker.chunk.return_value = [_make_chunk("doc_1", 0, "内容一")]
-        mock_embedder.embed.return_value = [[0.1, 0.2]]
+        mock_chunker.chunk.side_effect = [
+            [_make_chunk("doc_1", 0, "块一")],
+            [_make_chunk("doc_2", 0, "块二")],
+        ]
+        mock_embedder.embed.return_value = [[0.1], [0.2]]
 
-        events = []
-        pipeline.run(source=mock_source, on_progress=events.append)
+        calls = []
+        pipeline.run(source=mock_source, on_document_done=lambda: calls.append(1))
 
-        # chunk start, chunk done, embed start, embed done, store start, store done
-        assert len(events) >= 6
-        stages = [e.stage for e in events]
-        assert "chunk" in stages
-        assert "embed" in stages
-        assert "store" in stages
-        # 验证回调参数
-        for e in events:
-            assert isinstance(e, ProgressEvent)
-            assert e.source_id == "doc_1"
+        assert len(calls) == 2
+
+    def test_on_document_done_on_failure(self, pipeline, mock_source, mock_chunker, mock_embedder):
+        """即使文档处理失败，on_document_done 也会被调用"""
+        doc1 = _make_doc("doc_1", "内容一")
+        doc2 = _make_doc("doc_2", "内容二")
+        mock_source.fetch_batch.return_value = iter([[doc1, doc2]])
+
+        mock_chunker.chunk.side_effect = [ValueError("失败"), [_make_chunk("doc_2", 0, "块二")]]
+        mock_embedder.embed.return_value = [[0.3]]
+
+        calls = []
+        pipeline.run(source=mock_source, on_document_done=lambda: calls.append(1))
+
+        assert len(calls) == 2  # 成功和失败都调用
+
+    def test_should_cancel_interrupts(self, pipeline, mock_source, mock_chunker, mock_embedder):
+        """should_cancel 返回 True 时中断后续处理"""
+        doc1 = _make_doc("doc_1", "内容一")
+        doc2 = _make_doc("doc_2", "内容二")
+        doc3 = _make_doc("doc_3", "内容三")
+        mock_source.fetch_batch.return_value = iter([[doc1, doc2, doc3]])
+
+        mock_chunker.chunk.side_effect = [
+            [_make_chunk("doc_1", 0, "块一")],
+            [_make_chunk("doc_2", 0, "块二")],
+        ]
+        mock_embedder.embed.return_value = [[0.1], [0.2]]
+
+        cancel_after = 0
+
+        def should_cancel():
+            nonlocal cancel_after
+            cancel_after += 1
+            return cancel_after > 1  # 第2篇文档后取消
+
+        report = pipeline.run(source=mock_source, should_cancel=should_cancel)
+
+        assert report.total == 3
+        # 第1篇处理了，第2篇开始前取消
+        assert report.new + report.skipped <= 2
 
     # --------------------------------------------------
     # 6. 错误回调
@@ -264,7 +302,7 @@ class TestIngestionPipeline:
     def test_on_error_called(self, mock_sqlite, mock_chroma, mock_embedder, mock_chunker):
         """错误回调被调用"""
         doc1 = _make_doc("doc_1", "内容一")
-        mock_source = MagicMock()
+        mock_source = MagicMock(spec=DocumentSource)
         mock_source.fetch_batch.return_value = iter([[doc1]])
 
         mock_chunker.chunk.side_effect = ValueError("出错了")

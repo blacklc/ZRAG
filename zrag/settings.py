@@ -1,4 +1,5 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from zrag.config.loader import load_config
@@ -12,12 +13,10 @@ ZRAG_LLM = _config.get("llm", {})
 ZRAG_EMBEDDING = _config.get("embedding", {})
 ZRAG_STORAGE = _config.get("storage", {})
 ZRAG_INGEST = _config.get("ingest", {})
+ZRAG_INGEST_EXECUTOR = ThreadPoolExecutor(
+    max_workers=ZRAG_INGEST.get("task_pool_size", 2)
+)
 ZRAG_RETRIEVAL = _config.get("retrieval", {})
-
-DEFAULT_THROTTLE_RATES = _config.get("api", {}).get("throttle_rates", {
-    'chat': '10/min',
-    'ingest': '3/min',
-})
 
 SECRET_KEY = 'django-insecure-dev-only-key'
 DEBUG = True
@@ -47,7 +46,6 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [],
     'UNAUTHENTICATED_USER': None,
     'DEFAULT_THROTTLE_CLASSES': [],
-    'DEFAULT_THROTTLE_RATES': DEFAULT_THROTTLE_RATES,
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'EXCEPTION_HANDLER': 'zrag.api.exception_handler.api_exception_handler',
 }
@@ -142,7 +140,7 @@ LOGGING = {
         'file_debug': {
             'level': 'DEBUG',
             'class': 'logging.handlers.TimedRotatingFileHandler',
-            'filename': os.path.join(BASE_DIR, 'log', 'debug.log'),
+            'filename': os.path.join(BASE_DIR, 'logs', 'debug.log'),
             'when': 'D',
             'interval': 1,
             'backupCount': 7,
@@ -153,7 +151,7 @@ LOGGING = {
         'file_info': {
             'level': 'INFO',
             'class': 'logging.handlers.TimedRotatingFileHandler',
-            'filename': os.path.join(BASE_DIR, 'log', 'info.log'),
+            'filename': os.path.join(BASE_DIR, 'logs', 'info.log'),
             'when': 'D',
             'interval': 1,
             'backupCount': 7,
@@ -164,7 +162,7 @@ LOGGING = {
         'file_warning': {
             'level': 'WARNING',
             'class': 'logging.handlers.TimedRotatingFileHandler',
-            'filename': os.path.join(BASE_DIR, 'log', 'warning.log'),
+            'filename': os.path.join(BASE_DIR, 'logs', 'warning.log'),
             'when': 'D',
             'interval': 1,
             'backupCount': 7,
@@ -175,7 +173,7 @@ LOGGING = {
         'file_error': {
             'level': 'ERROR',
             'class': 'logging.handlers.TimedRotatingFileHandler',
-            'filename': os.path.join(BASE_DIR, 'log', 'error.log'),
+            'filename': os.path.join(BASE_DIR, 'logs', 'error.log'),
             'when': 'D',
             'interval': 1,
             'backupCount': 7,

@@ -4,10 +4,14 @@
 使用 RRF（Reciprocal Rank Fusion）算法对两种检索结果进行融合与重排序。
 """
 
+import logging
+
 from zrag.embed.base import EmbeddingModel
 from zrag.models.retrieval import SearchResult
 from zrag.store.sqlite_store import SQLiteStore
 from zrag.store.vector_store import ChromaStore
+
+logger = logging.getLogger(__name__)
 
 
 class Retriever:
@@ -42,6 +46,10 @@ class Retriever:
         self.sqlite_store = sqlite_store
         self.chroma_store = chroma_store
         self.embedder = embedder
+        if not isinstance(embedder, EmbeddingModel):
+            raise TypeError(
+                f"embedder 必须是 EmbeddingModel 的子类，实际类型: {type(embedder).__name__}"
+            )
 
     def hybrid_search(self, query: str, k: int = 10) -> list[SearchResult]:
         """混合检索: ChromaDB 向量检索 + SQLite FTS5 关键词检索 -> RRF 融合
@@ -163,6 +171,8 @@ class Retriever:
         @type:   list[SearchResult]
         """
         result_map: dict[str, SearchResult] = {}
+        path_a_count = 0
+        path_b_count = 0
 
         # 优先从 keyword_results 获取完整信息
         for kr in keyword_results:
@@ -174,6 +184,12 @@ class Retriever:
                 source_id=kr['source_id'],
                 source_type=kr['source_type'],
                 score=rrf_scores.get(cid, 0.0),
+                chunk_index=kr.get('chunk_index'),
+            )
+            path_a_count += 1
+            logger.info(
+                "Path A (keyword): chunk_id=%s doc_title=%s score=%.4f",
+                cid, kr['doc_title'], rrf_scores.get(cid, 0.0),
             )
 
         # 对仅在 vector_results 中出现的 chunk_id, 尝试通过 SQLite 补充信息
@@ -192,17 +208,27 @@ class Retriever:
                         source_id=row['source_id'],
                         source_type=row['source_type'],
                         score=rrf_scores.get(cid, 0.0),
+                        chunk_index=row.get('chunk_index'),
+                    )
+                    path_b_count += 1
+                    logger.info(
+                        "Path B (vector+SQLite): chunk_id=%s doc_title=%s score=%.4f",
+                        cid, row['doc_title'], rrf_scores.get(cid, 0.0),
                     )
                 else:
                     meta = vr['metadata']
-                    result_map[cid] = SearchResult(
-                        chunk_id=cid,
-                        content='',
-                        doc_title=meta.get('doc_title', ''),
-                        source_id=meta.get('source_id', ''),
-                        source_type=meta.get('source_type', ''),
-                        score=rrf_scores.get(cid, 0.0),
+                    logger.warning(
+                        "Path C (skip): chunk_id=%s not found in SQLite, "
+                        "metadata_keys=%s, skipping",
+                        cid,
+                        list(meta.keys()) if meta else [],
                     )
+                    continue
+
+        logger.info(
+            "_build_results: total=%d (path_a=%d path_b=%d) k=%d",
+            len(result_map), path_a_count, path_b_count, k,
+        )
 
         results = sorted(result_map.values(), key=lambda r: r.score, reverse=True)
         return results[:k]

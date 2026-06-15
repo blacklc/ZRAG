@@ -1,3 +1,4 @@
 # 文档摄入配置
 ingest:
   batch_size: 5
+  task_pool_size: 2

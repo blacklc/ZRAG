@@ -8,6 +8,7 @@
 - 知识碎片化，散落在不同 App 和文件系统中
 - 手动搜索无法处理"语义相近但用词不同"的查询
 - 无法对知识进行自然语言级别的归纳与问答
+- 中文查询场景下关键词检索无法匹配中文分词，导致混合检索退化为纯向量检索
 
 ## 解决方案
 
@@ -15,7 +16,8 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 
 核心能力：
 - **文档摄入**：从 macOS Notes 等来源自动拉取 → 分块 → 向量化 → 双库存储
-- **混合检索**：语义检索（ChromaDB）+ 关键词检索（SQLite FTS5 BM25）→ RRF 融合排序
+- **文档导出**：通过 AppleScript 从 macOS Notes.app 获取 HTML，经增强的 HTML→Markdown 转换器（五阶段流水线，覆盖 12 种标签）处理为结构化 Markdown
+- **混合检索**：语义检索（ChromaDB Cosine）+ 关键词检索（SQLite FTS5 BM25 + jieba 中文分词）→ RRF 融合排序 + 同源 chunk 合并
 - **RAG 问答**：检索结果 → Prompt 构建 → LiteLLM Gateway → LLM 生成回答（附来源标注）
 - **会话管理**：多轮对话持久化，支持切换、继续和删除历史对话
 - **Web UI**：Apple 风格聊天界面，深色/浅色模式切换，Markdown 渲染，代码高亮
@@ -40,6 +42,13 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 16. 作为普通用户，我希望用 Shift+Enter 输入多行问题，以便能够粘贴代码片段进行分析
 17. 作为开发者，我希望有一套 RESTful API 和一致的错误处理，以便在 ZRAG 之上构建集成
 18. 作为普通用户，我希望通过左侧边栏切换不同的历史对话，以便查阅之前的讨论
+19. 作为笔记用户，我希望在容器化部署中也能导入 macOS 备忘录，以便在无法直接调用 AppleScript 的环境中使用
+20. 作为普通用户，我希望在触发导入后看到实时进度（阶段名称 + 进度条），以便知道当前处于哪个阶段
+21. 作为普通用户，我希望能够取消正在进行的导入任务，以便在误操作或等待时间过长时终止
+22. 作为普通用户，我希望离开页面后再回来仍能看到正在进行的导入进度，以便追踪任务状态
+23. 作为普通用户，我希望选择按笔记标签过滤导出范围，以便只导入特定主题的笔记
+24. 作为技术用户，我希望检索系统能理解中文查询的关键词匹配，以便用中文提问时获得准确的检索结果
+25. 作为知识工作者，我希望同一篇文档的相关段落被合并展示，以便在 AI 回答中获得更连贯的上下文
 
 ## 实现决策
 
@@ -54,19 +63,29 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 
 ### 存储层
 
-- SQLite（data/zrag.db）：数据源，存储 chunks 原文、FTS5 全文索引、processed_docs 处理进度、conversations 会话、messages 消息
+- SQLite（data/zrag.db）：数据源，存储 chunks 原文、FTS5 全文索引（jieba 中文分词）、processed_docs 处理进度、conversations 会话、messages 消息
 - ChromaDB（data/chroma_db/）：向量存储，Cosine 距离，单 Collection "zrag_docs"
 - 数据一致性策略：先写 SQLite（ACID 保证），后写 ChromaDB（失败可补偿重试）。processed_docs 标记"双库均已就绪"
 - FTS5 提供内置 BM25 评分——无需手写 BM25，零额外依赖
+- FTS5 中文分词：写入和查询时对 content 列统一调用 jieba 分词，中英混合文本仅对中文部分做分词，英文/代码部分保留原样
 
 ### 文档摄入
 
 - DocumentSource 抽象基类，定义 fetch_batch() 和 source_type 接口——首个实现为 MacNotesSource
-- ChunkingStrategy 抽象基类，定义 chunk(document) → list[Chunk] 接口——ParagraphChunker、MarkdownHeadingChunker、RecursiveCharacterChunker、CompositeChunker
+- ChunkingStrategy 抽象基类，定义 chunk(document) → list[Chunk] 接口。首个实现为 ParagraphChunker（按段落切分），后续新增 HeadingChunker：按 Markdown 标题层级（H1-H3）作为语义切分边界，无标题时回退到 RecursiveCharacterChunker，超长段二次切分时子 chunk 继承父标题路径。mac_notes 来源使用 CompositeChunker(HeadingChunker, RecursiveCharacterChunker)，参数为 levels=[1,2,3], max_size=1024, min_size=200, overlap=100
 - IngestionPipeline 编排全流程：Source → Chunk → Embed → 写 SQLite → 写 ChromaDB → 更新 processed_docs
 - 每篇文档独立事务（非批量事务）
 - 默认增量导入（content_hash 对比），全量导入通过 {"full": true} 触发
 - LLM 调用在数据库事务之外——失败则零副作用，无需回滚
+- **异步摄入**：`POST /v1/documents/ingest` 改为异步模式——创建任务后立即返回 202 + task_id，实际处理在后台线程池中执行
+- **任务管理**：TaskStatus 状态机 PENDING → WAITING_EXPORT → PROCESSING → DONE/CANCELLED/FAILED；任意非终态可取消；取消信号通过 threading.Event 实现
+- **文件桥接模式**：MacNotesSource 在容器环境中不直接调用 AppleScript，改为通过共享 Volume 读取宿主机导出脚本生成的 JSON 文件（manifest.json + result.json + 单条笔记 JSON）
+- Pipeline `run()` 新增 `should_cancel` 和 `on_document_done` 回调参数，移除 `on_progress` + `ProgressEvent`
+
+### Markdown 转换
+
+- `export_notes.py` 中 `NotesExporter._html_to_markdown()` 采用五阶段流水线：预处理（移除 base64 图片 + 统一换行）→ 块级元素（pre/code→```, h1-h6→#, ul/ol/li→列表, blockquote→>, table→表格, hr→---, p/br→换行）→ 内联元素（b/strong→**, i/em→*, del/s→~~, code→`, a→[](), img→![]()）→ 清理（移除剩余标签 + HTML 实体解码）→ 整理（压缩空白 + base64 安全网）
+- 作为通用转换器实现，不依赖 Apple Notes 特定 HTML 结构，覆盖 12 种常见 HTML 标签
 
 ### Embedding
 
@@ -76,9 +95,11 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 
 ### 检索层
 
-- 混合检索：ChromaDB similarity_search(k=10) + SQLite FTS5 bm25()(k=10) → RRF 融合(k=60)
+- 混合检索：ChromaDB similarity_search(k=10) + SQLite FTS5 BM25 with jieba 分词(k=10) → RRF 融合(k=60)
 - RRF 公式：score(d) = 1/(60 + rank_vector) + 1/(60 + rank_bm25)
 - 结果按 RRF 分数排序，通过排序融合自然去重
+- SearchResult 数据类包含 chunk_index 字段，供同源合并时排序
+- build_rag_prompt() 中按 doc_title 合并同源 chunks，按 chunk_index 排序后拼接为单个 [来源: X] 块
 - PromptBuilder 独立负责 Prompt 构建，与 LLM 通信解耦
 - 检索异常统一抛出 RetrievalException（500，内层异常链式传递）
 
@@ -111,8 +132,11 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 | GET /v1/conversations | GET | 会话列表（含 total 总数，按最近消息倒序） |
 | GET /v1/conversations/{id}/messages | GET | 获取某会话的全部消息 |
 | DELETE /v1/conversations/{id} | DELETE | 删除会话及消息（幂等） |
-| POST /v1/documents/ingest | POST | 触发文档摄入（支持 full 参数） |
-| GET /v1/sources | GET | 列出 Source 及文档统计 |
+| POST /v1/documents/ingest | POST | 触发文档摄入（改为异步，返回 202 + task_id） |
+| GET /v1/ingest/{id}/status | GET | 查询摄入任务状态和进度 |
+| POST /v1/ingest/{id}/cancel | POST | 取消摄入任务 |
+| GET /v1/sources | GET | 列出已摄入 Source 及文档统计 |
+| GET /v1/sources/available | GET | 返回 SOURCE_REGISTRY 中已注册的数据源类型 |
 | GET /v1/health/live | GET | Liveness（进程存活） |
 | GET /v1/health/ready | GET | Readiness（SQLite + ChromaDB 依赖检查） |
 
@@ -134,7 +158,7 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 - 页面标题：固定 "ZRAG"
 - 响应式布局：移动端侧边栏可折叠
 - 输入框：自动扩展 textarea（最大 6 行），占位符 "向你的知识库提问"
-- 源管理页：增量导入 + 全量导入两个按钮，点击后显示不确定进度条，完成后自动刷新
+- 源管理页：数据源下拉选择器 + 增量/全量导入按钮 + 永久性导出命令提示 + 阶段名称 + 确定进度条 + 取消按钮；摄入中关闭页面后重开自动恢复轮询；使用 useIngest composable 管理状态；sessionStorage 持久化活跃 taskId
 - API 错误处理：网络/500 错误 → Toast 通知；对话错误 → 红色消息气泡
 - 无需设置面板（API Key 构建时注入）
 - API Key：通过 VITE_API_KEY 环境变量在构建时注入，前端 JS 直接使用
@@ -188,6 +212,7 @@ CREATE VIRTUAL TABLE chunks_fts USING fts5(content, content=chunks, content_rowi
 CREATE TABLE processed_docs (source_id TEXT PK, source_type TEXT, content_hash TEXT, imported_at TEXT);
 CREATE TABLE conversations (id TEXT PK, title TEXT, created_at TEXT);
 CREATE TABLE messages (id TEXT PK, conversation_id TEXT FK, role TEXT, content TEXT, sources TEXT, created_at TEXT);
+CREATE TABLE ingest_tasks (id TEXT PK, task_type TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', total INTEGER DEFAULT 0, processed INTEGER DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')));
 ```
 
 ## 测试决策
@@ -206,10 +231,14 @@ CREATE TABLE messages (id TEXT PK, conversation_id TEXT FK, role TEXT, content T
 | 存储层 SQLite | CRUD 操作、FTS5 搜索、事务回滚、processed_docs 追踪 |
 | 存储层 ChromaDB | add、similarity_search、delete_by_source、Collection 管理 |
 | Embedding | embed() 返回正确维度、embed_query() 一致性、normalize_embeddings |
-| 摄入 MacNotesSource | osascript mock、HTML→Markdown 转换、fetch_batch 分页 |
+| 摄入 MacNotesSource | 文件桥接模式：轮询 result.json、逐篇读取 JSON 文件构造 RawDocument |
+| 摄入 TaskManager | 创建任务、提交线程池、取消信号、状态转换、DB 持久化 |
 | 摄入 ChunkingStrategy | 分块边界、max_size 强制、overlap 行为、CompositeChunker 递归 |
+| HeadingChunker | 标题边界切分、无标题回退、超长段降级、min_size 合并、标题路径继承 |
 | 摄入 IngestionPipeline | 全流程 run()、重复检测、全量导入模式、错误事件发送 |
 | LLM Provider | chat() 带 mock gateway、错误处理（回调 vs 抛异常）、超时行为 |
+| HTML→Markdown 转换 | 12 种标签转换正确性、base64 图片移除、实体解码、空白整理 |
+| FTS5 jieba 分词 | 中文分词正确性、中英混合文本处理、写入/查询一致性 |
 | 检索 Retriever | hybrid_search 去重结果、RRF 评分正确性、空结果处理 |
 | 检索 PromptBuilder | build() 输出结构、上下文截断、来源格式化 |
 | API 全部端点 | 请求/响应校验、认证检查、速率限制、错误响应、404 处理 |
@@ -228,9 +257,8 @@ CREATE TABLE messages (id TEXT PK, conversation_id TEXT FK, role TEXT, content T
 - 实时流式 SSE 端点（Phase 2）
 - 移动端 App 或 PWA
 - 云端部署 / Kubernetes / CI/CD 流水线
-- 按来源自定义分块策略组合
 - 会话标题编辑 / 会话搜索功能
-- 源管理页实时进度通过 SSE（仅做不确定进度条）
+- 源管理页实时进度通过 SSE
 - 数据备份功能
 - PDF/DOCX/TXT 文件源（先做 MacNotesSource，后续扩展）
 - Ollama 本地模型支持（LiteLLM Gateway 统一管理模型路由）
@@ -244,3 +272,5 @@ CREATE TABLE messages (id TEXT PK, conversation_id TEXT FK, role TEXT, content T
 - 全部模块设计方案及各模块代码片段记录于 docs/QA.md（Q0-Q35）
 - 全程无 LangChain/LlamaIndex/FastAPI/手写 BM25/Jinja2 服务端渲染
 - Prompt 模板引擎：Jinja2（zrag/prompts/chat_system.j2），支持条件渲染和格式化
+- 混合检索准确度优化设计讨论记录于 docs/QA/hybrid-search-accuracy.md
+- 中文分词方案采用 jieba（纯 Python 实现，轻量无外部服务依赖）

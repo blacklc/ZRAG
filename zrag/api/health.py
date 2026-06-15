@@ -3,9 +3,21 @@
 提供进程存活检查和依赖服务健康检查端点。
 """
 
-from rest_framework import viewsets
+from drf_spectacular.utils import OpenApiResponse, extend_schema
+from rest_framework import serializers, viewsets
 
 from zrag.api.response import APIResponse
+
+
+class HealthLiveResponseSerializer(serializers.Serializer):
+    """存活检查响应"""
+    status = serializers.CharField(help_text="固定为 'alive'")
+
+
+class HealthReadyResponseSerializer(serializers.Serializer):
+    """就绪检查响应"""
+    status = serializers.CharField(help_text="'ready' 或 'not_ready'")
+    checks = serializers.DictField(help_text="各依赖组件检查结果")
 
 
 class HealthViewSet(viewsets.ViewSet):
@@ -20,6 +32,13 @@ class HealthViewSet(viewsets.ViewSet):
     authentication_classes = []
     throttle_classes = []
 
+    @extend_schema(
+        summary="进程存活检查",
+        description="检查服务进程是否存活，不检查依赖服务。跳过认证。",
+        responses={
+            200: OpenApiResponse(response=HealthLiveResponseSerializer, description="服务存活"),
+        },
+    )
     def live(self, request):
         """GET /v1/health/live — 进程存活检查, 跳过认证和限速
 
@@ -31,6 +50,14 @@ class HealthViewSet(viewsets.ViewSet):
         """
         return APIResponse(data={"status": "alive"})
 
+    @extend_schema(
+        summary="服务就绪检查",
+        description="检查 SQLite 和 ChromaDB 依赖服务是否可用。全部正常返回 200，任一异常返回 503。跳过认证。",
+        responses={
+            200: OpenApiResponse(response=HealthReadyResponseSerializer, description="所有依赖正常"),
+            503: OpenApiResponse(response=HealthReadyResponseSerializer, description="部分依赖不可用"),
+        },
+    )
     def ready(self, request):
         """GET /v1/health/ready — 依赖检查: SQLite + ChromaDB
 

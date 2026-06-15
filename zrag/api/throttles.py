@@ -71,7 +71,7 @@ class ChatRateThrottle(_ThrottleRatesMixin, SimpleRateThrottle):
 class IngestRateThrottle(_ThrottleRatesMixin, SimpleRateThrottle):
     """数据接入接口速率限制器
 
-    用于限制数据接入 API 的请求频率,
+    用于限制数据摄入 API 的请求频率（POST /v1/documents/ingest）,
     对应的速率配置 key 为 "ingest"。
 
     @param scope: 速率限制范围名称
@@ -79,3 +79,16 @@ class IngestRateThrottle(_ThrottleRatesMixin, SimpleRateThrottle):
     """
 
     scope = "ingest"
+
+
+class SourcesRateThrottle(_ThrottleRatesMixin, SimpleRateThrottle):
+    """来源查询接口速率限制器
+
+    用于限制来源列表、可用来源等查询 API 的请求频率（GET /v1/sources、/v1/sources/available）,
+    对应的速率配置 key 为 "sources"。限额高于 ingest 以允许频繁查询。
+
+    @param scope: 速率限制范围名称
+    @type  scope: str
+    """
+
+    scope = "sources"

@@ -219,3 +219,15 @@ class TestRetriever:
 
         assert len(results) == 0
         assert results == []
+
+
+class TestBuildResultsChunkIndex:
+    def test_chunk_index_in_search_result(self):
+        """验证 SearchResult 包含 chunk_index 字段"""
+        from zrag.models.retrieval import SearchResult
+        sr = SearchResult(
+            chunk_id="test", content="test", doc_title="test",
+            source_id="test", source_type="test", score=1.0,
+            chunk_index=5
+        )
+        assert sr.chunk_index == 5

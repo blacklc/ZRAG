@@ -35,5 +35,11 @@ class ZragConfig(AppConfig):
         get_chroma_store(persist_dir=chroma_path).init_collection()
 
         # 预加载 BGE Embedding 模型（单例模式，避免重复加载）
-        from zrag.embed.local import get_embedder
-        get_embedder()
+        # 注意: 若 HuggingFace 网络不可达, 模型将延迟到首次使用时加载
+        try:
+            from zrag.embed.local import get_embedder
+            get_embedder()
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning("Embedding 模型预加载失败, 将在首次使用时延迟加载: %s", str(e))

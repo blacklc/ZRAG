@@ -3,6 +3,22 @@ from contextlib import contextmanager
 from typing import Any
 
 from zrag.models.document import Chunk
+import jieba
+
+
+def _tokenize_text(text: str) -> str:
+    """对文本做 jieba 分词，返回空格分隔的字符串
+
+    中英混合文本：中文部分做 jieba 分词，英文/代码部分保留原样。
+
+    @param text: 待分词文本
+    @type  text: str
+    @return: 分词后的空格分隔字符串
+    @rtype:  str
+    """
+    if not text:
+        return ""
+    return ' '.join(jieba.cut(text))
 
 
 class SQLiteStore:
@@ -101,8 +117,8 @@ class SQLiteStore:
         """批量写入文档分块记录
 
         将多个 Chunk 对象一次性写入 chunks 表。
+        FTS5 索引在插入 chunks 后以分词后内容写入 chunks_fts 表。
         该方法不会自动提交事务, 调用者需要视情况包裹在 transaction() 上下文中。
-        FTS5 索引通过 SQLite 触发器自动同步更新。
 
         @param chunks: 待写入的分块对象列表
         @type  chunks: list[Chunk]
@@ -111,12 +127,21 @@ class SQLiteStore:
         @type:   sqlite3.IntegrityError
         """
         conn = self._get_conn()
-        conn.executemany(
-            "INSERT INTO chunks (chunk_id, source_id, source_type, doc_title, content, chunk_index) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            [(c.chunk_id, c.source_id, c.source_type, c.doc_title, c.content, c.chunk_index)
-             for c in chunks],
-        )
+        for c in chunks:
+            cursor = conn.execute(
+                "INSERT INTO chunks (chunk_id, source_id, source_type, doc_title, content, chunk_index) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (c.chunk_id, c.source_id, c.source_type, c.doc_title, c.content, c.chunk_index),
+            )
+            rowid = cursor.lastrowid
+            # Replace trigger-inserted raw content with tokenized content for FTS5 indexing
+            tokenized = _tokenize_text(c.content)
+            conn.execute(
+                "INSERT INTO chunks_fts(chunks_fts, rowid) VALUES('delete', ?)", (rowid,)
+            )
+            conn.execute(
+                "INSERT INTO chunks_fts(rowid, content) VALUES(?, ?)", (rowid, tokenized)
+            )
 
     def delete_by_source(self, source_id: str) -> None:
         """删除指定源文档的所有分块
@@ -162,11 +187,12 @@ class SQLiteStore:
             (doc.source_id, doc.source_type, doc.content_hash),
         )
 
+
     def search_fts5(self, query: str, k: int = 10) -> list[dict]:
         """使用 FTS5 全文搜索引擎进行关键词检索
 
         对用户查询进行全文搜索, 按 BM25 相关性评分排序返回前 k 条结果。
-        查询语法遵循 SQLite FTS5 的 MATCH 语法, 支持 AND/OR/NOT 等布尔操作。
+        查询字符串会先经过特殊字符清洗, 再经过 jieba 分词后传递给 FTS5 MATCH。
 
         @param query: 用户输入的搜索查询字符串
         @type  query: str
@@ -174,17 +200,30 @@ class SQLiteStore:
         @type  k: int, optional
 
         @return: 搜索结果列表, 每条包含 chunks 表的所有字段及 bm25_score 评分
-        @type:   list[dict]
+        @rtype:   list[dict]
         """
-        return self.fetch_all(
-            """SELECT c.*, bm25(chunks_fts) AS bm25_score
-               FROM chunks_fts
-               JOIN chunks c ON c.rowid = chunks_fts.rowid
-               WHERE chunks_fts MATCH ?
-               ORDER BY bm25(chunks_fts)
-               LIMIT ?""",
-            (query, k),
-        )
+        safe_query = _sanitize_fts5_query(query)
+        tokenized_query = _tokenize_text(safe_query)
+        # 过滤短 token：非 ASCII 且长度 < 2 的丢弃（中文单字词如"我""想""的"无检索价值）
+        tokens = tokenized_query.split()
+        filtered_tokens = [t for t in tokens if t.isascii() or len(t) >= 2]
+        if filtered_tokens:
+            tokenized_query = ' '.join(filtered_tokens)
+        try:
+            return self.fetch_all(
+                """SELECT c.*, bm25(chunks_fts) AS bm25_score
+                   FROM chunks_fts
+                   JOIN chunks c ON c.rowid = chunks_fts.rowid
+                   WHERE chunks_fts MATCH ?
+                   ORDER BY bm25(chunks_fts)
+                   LIMIT ?""",
+                (tokenized_query, k),
+            )
+        except Exception:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning("FTS5 检索失败: query=%s safe_query=%s tokenized=%s", query, safe_query, tokenized_query)
+            return []
 
     @contextmanager
     def transaction(self):
@@ -285,6 +324,18 @@ class SQLiteStore:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_conv_id ON messages(conversation_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(conversation_id, created_at)")
 
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ingest_tasks (
+                id            TEXT PRIMARY KEY,
+                task_type     TEXT NOT NULL,
+                status        TEXT NOT NULL DEFAULT 'pending',
+                total         INTEGER DEFAULT 0,
+                processed     INTEGER DEFAULT 0,
+                created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+
     def close(self) -> None:
         """关闭数据库连接
 
@@ -294,6 +345,26 @@ class SQLiteStore:
         if self._conn is not None:
             self._conn.close()
             self._conn = None
+
+
+def _sanitize_fts5_query(query: str) -> str:
+    """清洗 FTS5 查询字符串，转义特殊字符
+
+    FTS5 MATCH 语法中的特殊字符（如 *、\"、(、)、? 等）会导致语法错误。
+    将这些字符替换为空格，保留纯文本关键词。
+
+    @param query: 用户原始查询
+    @type  query: str
+
+    @return: 清洗后的安全查询字符串
+    @rtype:  str
+    """
+    import re
+    # 移除 FTS5 特殊字符，仅保留中英文、数字和空格
+    safe = re.sub(r'[^\w一-鿿\s]', ' ', query)
+    # 压缩多余空白
+    safe = re.sub(r'\s+', ' ', safe).strip()
+    return safe
 
 
 # === 模块级单例 ===

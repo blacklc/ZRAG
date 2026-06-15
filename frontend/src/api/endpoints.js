@@ -80,3 +80,26 @@ export const getHealthLive = () => apiGet('/v1/health/live')
  * @returns {Promise<*>} 后端响应数据
  */
 export const getHealthReady = () => apiGet('/v1/health/ready')
+
+/**
+ * 获取摄入任务状态
+ *
+ * @param {string} taskId - 任务 ID
+ * @returns {Promise<{task_id: string, status: string, total: number, processed: number}>}
+ */
+export const getTaskStatus = (taskId) => apiGet(`/v1/ingest/${taskId}/status`)
+
+/**
+ * 取消摄入任务
+ *
+ * @param {string} taskId - 任务 ID
+ * @returns {Promise<*>}
+ */
+export const cancelIngestTask = (taskId) => apiPost(`/v1/ingest/${taskId}/cancel`)
+
+/**
+ * 获取可用数据源列表
+ *
+ * @returns {Promise<{sources: string[]}>}
+ */
+export const getAvailableSources = () => apiGet('/v1/sources/available')

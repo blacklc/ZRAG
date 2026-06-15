@@ -5,8 +5,12 @@
 支持 Cosine 距离的向量相似度搜索、按 source_id 批量删除等功能。
 """
 
+import logging
+
 import chromadb
 from chromadb.config import Settings as ChromaSettings
+
+logger = logging.getLogger(__name__)
 
 
 class ChromaStore:
@@ -130,9 +134,11 @@ class ChromaStore:
         distances = results['distances'][0]
         metadatas = results['metadatas'][0]
         for i in range(len(ids)):
+            if metadatas[i] is None:
+                logger.warning("similarity_search: metadata[%d] is None, chunk_id=%s", i, ids[i])
             output.append({
                 'id': ids[i],
-                'metadata': metadatas[i] or {},
+                'metadata': metadatas[i] if metadatas[i] is not None else {},
                 'distance': distances[i],
             })
         return output

@@ -9,6 +9,9 @@
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
+import logging
+
+logger = logging.getLogger(__name__)
 
 _prompts_dir = Path(__file__).resolve().parent.parent / "prompts"
 _env = Environment(loader=FileSystemLoader(str(_prompts_dir)))
@@ -29,11 +32,25 @@ def build_rag_prompt(query: str, results: list) -> list[dict]:
     @return: [{"role": "system", "content": "..."}, {"role": "user", "content": query}]
     @rtype:   list[dict]
     """
-    materials = [
-        {"doc_title": r.doc_title, "content": r.content}
-        for r in results
-    ]
     template = _env.get_template("chat_system.j2")
+
+    # 按 doc_title 合并同源 chunks，按 chunk_index 排序
+    merged = {}
+    sorted_results = sorted(results, key=lambda r: r.chunk_index or 0)
+    for r in sorted_results:
+        if not r.doc_title:
+            logger.warning("Empty doc_title in result chunk_id=%s", getattr(r, 'chunk_id', 'unknown'))
+        merged.setdefault(r.doc_title, []).append(r.content)
+
+    materials = [
+        {"doc_title": k, "content": "\n\n".join(v)}
+        for k, v in merged.items()
+    ]
+
+    for m in materials:
+        if not m["content"].strip():
+            logger.warning("Empty content after merge for doc_title=%s", m["doc_title"])
+
     system_msg = template.render(reference_materials=materials)
     return [
         {"role": "system", "content": system_msg},

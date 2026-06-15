@@ -1,6 +1,23 @@
-"""测试切片 9/10 — MacNotesSource"""
+"""切片 10 — MacNotesSource 单元测试（文件桥接模式）
+
+旧版 MacNotesSource 通过 AppleScript 直接获取笔记数据；
+新版改为轮询宿主机导出的 JSON 文件目录。
+
+测试内容（文件桥接模式）:
+  - export_dir 未设置 -> ValueError
+  - result.json + note JSON 文件 -> 正确构造 RawDocument
+  - manifest.json 和 result.json 被跳过
+  - batch_size 参数分批次生效
+  - result.json status != "ok" -> ValueError
+  - source_type -> "mac_notes"
+  - total_count -> result.json 的 "success" 值
+"""
+
 import hashlib
-import subprocess
+import json
+import os
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -9,191 +26,192 @@ from zrag.ingest.sources.mac_notes import MacNotesSource
 from zrag.models.document import RawDocument
 
 
-def _make_raw_doc(source_id, name, content, folder="默认"):
-    """创建用于 mock 的 RawDocument"""
-    return RawDocument(
-        source_id=source_id,
-        source_type="mac_notes",
-        content=content,
-        content_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
-        metadata={"folder": folder, "name": name},
-    )
+def _make_note_json(note_id: str, content: str, name: str = "") -> dict:
+    """生成笔记的 JSON 字典（与导出脚本格式一致）
+
+    @param note_id: 笔记 ID (如 NOTE:xxx)
+    @type  note_id: str
+    @param content: Markdown 内容
+    @type  content: str
+    @param name: 笔记名称 (写入 metadata)
+    @type  name: str
+
+    @return: 符合导出格式的 dict
+    @rtype:  dict
+    """
+    return {
+        "source_id": note_id,
+        "source_type": "mac_notes",
+        "content": content,
+        "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        "metadata": {"name": name} if name else {},
+    }
 
 
 class TestMacNotesSource:
-    """MacNotesSource 测试 — 使用 mock 模拟 AppleScript 调用"""
+    """MacNotesSource 测试 — 文件桥接模式"""
+
+    # --------------------------------------------------
+    # 1. source_type
+    # --------------------------------------------------
 
     def test_source_type(self):
         """source_type 应返回 'mac_notes'"""
         source = MacNotesSource()
         assert source.source_type == "mac_notes"
 
-    @patch.object(MacNotesSource, "_get_folder_data")
-    @patch("zrag.ingest.sources.mac_notes.subprocess.check_output")
-    def test_fetch_batch_returns_raw_documents(
-        self, mock_check_output, mock_folder_data
-    ):
-        """fetch_batch 返回 RawDocument 列表（合并 AppleScript 模式）"""
-        mock_check_output.return_value = "备忘录, 待办事项"
-        mock_folder_data.side_effect = [
-            [
-                _make_raw_doc("NOTE:111", "会议记录", "**会议记录内容**", "备忘录"),
-                _make_raw_doc("NOTE:222", "日程安排", "**日程安排内容**", "备忘录"),
-            ],
-            [
-                _make_raw_doc("NOTE:333", "购物清单", "购物清单内容", "待办事项"),
-                _make_raw_doc("NOTE:444", "工作任务", "工作任务内容", "待办事项"),
-            ],
-        ]
+    # --------------------------------------------------
+    # 2. export_dir 未设置 -> ValueError
+    # --------------------------------------------------
 
+    def test_fetch_batch_raises_without_export_dir(self):
+        """export_dir 未设置时 fetch_batch 抛出 ValueError"""
         source = MacNotesSource()
-        batches = list(source.fetch_batch(batch_size=10))
+        with pytest.raises(ValueError, match="export_dir"):
+            list(source.fetch_batch())
 
-        assert len(batches) == 1
-        batch = batches[0]
-        assert len(batch) == 4
+    # --------------------------------------------------
+    # 3. result.json + note JSON -> RawDocument
+    # --------------------------------------------------
 
-        for doc in batch:
-            assert isinstance(doc, RawDocument)
-            assert doc.source_type == "mac_notes"
-            assert doc.source_id.startswith("NOTE:")
-            assert doc.content_hash == hashlib.sha256(
-                doc.content.encode("utf-8")
-            ).hexdigest()
-            assert "folder" in doc.metadata
-            assert "name" in doc.metadata
+    def test_fetch_batch_returns_raw_documents(self):
+        """正确读取 result.json + note JSON，返回 RawDocument 列表"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            export_dir = Path(tmpdir)
 
-        assert batch[0].source_id == "NOTE:111"
-        assert batch[0].metadata["name"] == "会议记录"
-        assert batch[0].metadata["folder"] == "备忘录"
+            # 写入 result.json
+            result_data = {
+                "status": "ok",
+                "task_id": "task-test",
+                "expected": 2,
+                "success": 2,
+            }
+            with open(export_dir / "result.json", "w", encoding="utf-8") as f:
+                json.dump(result_data, f)
 
-        assert batch[2].source_id == "NOTE:333"
-        assert batch[2].metadata["folder"] == "待办事项"
+            # 写入笔记 JSON 文件
+            note1 = _make_note_json("NOTE:111", "**会议记录内容**", "会议记录")
+            note2 = _make_note_json("NOTE:222", "**日程安排内容**", "日程安排")
+            with open(export_dir / "NOTE:111.json", "w", encoding="utf-8") as f:
+                json.dump(note1, f)
+            with open(export_dir / "NOTE:222.json", "w", encoding="utf-8") as f:
+                json.dump(note2, f)
 
-    @patch.object(MacNotesSource, "_get_folder_data")
-    def test_fetch_batch_single_folder(self, mock_folder_data):
-        """指定 folder_name 时只获取该文件夹 — 只需一次 _get_folder_data 调用"""
-        mock_folder_data.return_value = [
-            _make_raw_doc("NOTE:111", "会议记录", "内容1", "备忘录"),
-            _make_raw_doc("NOTE:222", "日程安排", "内容2", "备忘录"),
-        ]
+            source = MacNotesSource(export_dir=str(export_dir), poll_interval=0.1)
+            batches = list(source.fetch_batch(batch_size=10))
 
-        source = MacNotesSource(folder_name="备忘录")
-        batches = list(source.fetch_batch(batch_size=10))
+            assert len(batches) == 1
+            batch = batches[0]
+            assert len(batch) == 2
 
-        mock_folder_data.assert_called_once_with("备忘录")
-        assert len(batches) == 1
-        assert len(batches[0]) == 2
-        assert batches[0][0].metadata["folder"] == "备忘录"
+            for doc in batch:
+                assert isinstance(doc, RawDocument)
+                assert doc.source_type == "mac_notes"
 
-    @patch.object(MacNotesSource, "_get_folder_data")
-    @patch("zrag.ingest.sources.mac_notes.subprocess.check_output")
-    def test_full_sync_mode(self, mock_check_output, mock_folder_data):
-        """full_sync=True 遍历所有文件夹"""
-        mock_check_output.return_value = "备忘录, 待办事项, 个人"
-        mock_folder_data.side_effect = [
-            [_make_raw_doc("NOTE:111", "会议记录", "c1", "备忘录")],
-            [_make_raw_doc("NOTE:222", "日程安排", "c2", "待办事项")],
-            [_make_raw_doc("NOTE:333", "个人笔记", "c3", "个人")],
-        ]
+            assert batch[0].source_id == "NOTE:111"
+            assert batch[0].content == "**会议记录内容**"
+            assert batch[1].source_id == "NOTE:222"
 
-        source = MacNotesSource(full_sync=True)
-        batches = list(source.fetch_batch(batch_size=10))
+    # --------------------------------------------------
+    # 4. manifest.json 和 result.json 被跳过
+    # --------------------------------------------------
 
-        assert len(batches) == 1
-        assert len(batches[0]) == 3
-        folders = {doc.metadata["folder"] for doc in batches[0]}
-        assert folders == {"备忘录", "待办事项", "个人"}
+    def test_skips_manifest_and_result_json(self):
+        """manifest.json 和 result.json 不会被读取为笔记文档"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            export_dir = Path(tmpdir)
 
-    def test_html_to_markdown_removes_tags(self):
-        """<b>text 转为 **text**，<i> 转为 *"""
+            # 写入 result.json (status ok)
+            with open(export_dir / "result.json", "w", encoding="utf-8") as f:
+                json.dump({"status": "ok", "success": 1}, f)
+
+            # 写入 manifest.json (不应被读取为笔记)
+            with open(export_dir / "manifest.json", "w", encoding="utf-8") as f:
+                json.dump({"task_id": "t1"}, f)
+
+            # 写入一个有效笔记
+            note = _make_note_json("NOTE:001", "actual content")
+            with open(export_dir / "NOTE:001.json", "w", encoding="utf-8") as f:
+                json.dump(note, f)
+
+            source = MacNotesSource(export_dir=str(export_dir), poll_interval=0.1)
+            batches = list(source.fetch_batch(batch_size=10))
+
+            assert len(batches) == 1
+            assert len(batches[0]) == 1
+            assert batches[0][0].source_id == "NOTE:001"
+
+    # --------------------------------------------------
+    # 5. batch_size 参数
+    # --------------------------------------------------
+
+    def test_batch_size_works(self):
+        """batch_size 参数生效 — 5 篇文档, batch_size=2 -> 3 批次"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            export_dir = Path(tmpdir)
+
+            with open(export_dir / "result.json", "w", encoding="utf-8") as f:
+                json.dump({"status": "ok", "success": 5}, f)
+
+            for i in range(1, 6):
+                note = _make_note_json(f"NOTE:{i}", f"content_{i}")
+                with open(export_dir / f"NOTE:{i}.json", "w", encoding="utf-8") as f:
+                    json.dump(note, f)
+
+            source = MacNotesSource(export_dir=str(export_dir), poll_interval=0.1)
+            batches = list(source.fetch_batch(batch_size=2))
+
+            assert len(batches) == 3
+            assert len(batches[0]) == 2
+            assert len(batches[1]) == 2
+            assert len(batches[2]) == 1
+
+    # --------------------------------------------------
+    # 6. result.json status != "ok" -> ValueError
+    # --------------------------------------------------
+
+    def test_status_not_ok_raises_value_error(self):
+        """result.json status != "ok" 时抛出 ValueError"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            export_dir = Path(tmpdir)
+
+            with open(export_dir / "result.json", "w", encoding="utf-8") as f:
+                json.dump({"status": "failed", "error": "export error"}, f)
+
+            source = MacNotesSource(export_dir=str(export_dir), poll_interval=0.1)
+            with pytest.raises(ValueError, match="status=failed"):
+                list(source.fetch_batch())
+
+    def test_status_missing_raises_value_error(self):
+        """result.json 缺少 status 字段时抛出 ValueError"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            export_dir = Path(tmpdir)
+
+            with open(export_dir / "result.json", "w", encoding="utf-8") as f:
+                json.dump({"success": 0}, f)
+
+            source = MacNotesSource(export_dir=str(export_dir), poll_interval=0.1)
+            with pytest.raises(ValueError):
+                list(source.fetch_batch())
+
+    # --------------------------------------------------
+    # 7. total_count
+    # --------------------------------------------------
+
+    def test_total_count_matches_success(self):
+        """total_count 返回 result.json 中记录的 success 值"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            export_dir = Path(tmpdir)
+
+            with open(export_dir / "result.json", "w", encoding="utf-8") as f:
+                json.dump({"status": "ok", "success": 7}, f)
+
+            source = MacNotesSource(export_dir=str(export_dir), poll_interval=0.1)
+            list(source.fetch_batch(batch_size=10))
+
+            assert source.total_count == 7
+
+    def test_total_count_default_zero(self):
+        """未调用 fetch_batch 时 total_count 为 0"""
         source = MacNotesSource()
-        assert source._html_to_markdown("<b>hello</b>") == "**hello**"
-        assert source._html_to_markdown("<strong>world</strong>") == "**world**"
-        assert source._html_to_markdown("<i>italic</i>") == "*italic*"
-        assert source._html_to_markdown("<em>emphasized</em>") == "*emphasized*"
-
-    def test_html_to_markdown_links(self):
-        """<a href> 转为 [text](url)"""
-        source = MacNotesSource()
-        result = source._html_to_markdown(
-            '<a href="https://example.com">click here</a>'
-        )
-        assert result == "[click here](https://example.com)"
-
-    def test_html_to_markdown_headings(self):
-        """<h1>-<h6> 转为 #-##..."""
-        source = MacNotesSource()
-        assert source._html_to_markdown("<h1>T1</h1>") == "# T1"
-        assert source._html_to_markdown("<h2>T2</h2>") == "## T2"
-        assert source._html_to_markdown("<h3>T3</h3>") == "### T3"
-        assert source._html_to_markdown("<h6>T6</h6>") == "###### T6"
-
-    def test_html_to_markdown_line_breaks(self):
-        """<div>/<br>/<p> 转行"""
-        source = MacNotesSource()
-        assert source._html_to_markdown("line1<br>line2") == "line1\nline2"
-        result = source._html_to_markdown("<div>block1</div><div>block2</div>")
-        assert "block1" in result
-        assert "block2" in result
-
-    def test_html_to_markdown_complex_html(self):
-        """复杂 HTML 综合转换"""
-        source = MacNotesSource()
-        html = """
-        <h1>Meeting Notes</h1>
-        <div>
-            <p><b>Date:</b> 2024-01-15</p>
-            <p><i>Attendees:</i> Alice, Bob</p>
-            <p>See <a href="https://docs.example.com">docs</a>.</p>
-        </div>
-        """
-        result = source._html_to_markdown(html)
-        assert "# Meeting Notes" in result
-        assert "**Date:**" in result
-        assert "*Attendees:*" in result
-        assert "[docs](https://docs.example.com)" in result
-
-    def test_content_hash(self):
-        """相同内容返回相同 hash"""
-        source = MacNotesSource()
-        h1 = source._compute_hash("Hello")
-        h2 = source._compute_hash("Hello")
-        assert h1 == h2
-        assert len(h1) == 64
-        assert h1 != source._compute_hash("Different")
-
-    @patch.object(MacNotesSource, "_get_folder_data")
-    @patch("zrag.ingest.sources.mac_notes.subprocess.check_output")
-    def test_fetch_batch_batch_size(self, mock_check_output, mock_folder_data):
-        """batch_size 参数生效 — 5 篇文档, batch_size=2 → 3 批次"""
-        mock_check_output.return_value = "备忘录"
-        mock_folder_data.return_value = [
-            _make_raw_doc(f"NOTE:{i}", f"n{i}", f"c{i}") for i in range(1, 6)
-        ]
-        source = MacNotesSource()
-        batches = list(source.fetch_batch(batch_size=2))
-        assert len(batches) == 3
-        assert len(batches[0]) == 2
-        assert len(batches[1]) == 2
-        assert len(batches[2]) == 1
-
-    @patch.object(MacNotesSource, "_get_folder_data")
-    @patch("zrag.ingest.sources.mac_notes.subprocess.check_output")
-    def test_get_folder_data_failure(
-        self, mock_check_output, mock_folder_data
-    ):
-        """_get_folder_data 失败 (subprocess 异常) 时跳过该文件夹"""
-        mock_check_output.return_value = "备忘录, 待办事项"
-        mock_folder_data.side_effect = [
-            [_make_raw_doc("NOTE:111", "正常笔记", "c1")],
-            [],
-        ]
-        source = MacNotesSource()
-        batches = list(source.fetch_batch())
-        assert len(batches[0]) == 1
-
-    def test_empty_html_to_markdown(self):
-        """空 HTML → 空字符串"""
-        source = MacNotesSource()
-        assert source._html_to_markdown("") == ""
+        assert source.total_count == 0

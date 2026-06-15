@@ -22,6 +22,16 @@ class RecursiveCharacterChunker(ChunkingStrategy):
         self.max_size = max_size
         self.overlap = overlap
 
+    def _resolve_title(self, document) -> str:
+        """解析文档标题，保证非空
+
+        优先级: metadata.title -> fallback(source_type_source_id)
+        """
+        title = (document.metadata.get("title") or "") if document.metadata else ""
+        if not title:
+            title = f"{document.source_type}_{document.source_id}"
+        return title
+
     def chunk(self, document: RawDocument) -> list[Chunk]:
         """将原始文档通过递归字符分割切分为多个 Chunk
 
@@ -49,7 +59,7 @@ class RecursiveCharacterChunker(ChunkingStrategy):
                 chunk_id=f"{document.source_id}_chunk_{i}",
                 source_id=document.source_id,
                 source_type=document.source_type,
-                doc_title=document.metadata.get("title", "") if document.metadata else "",
+                doc_title=self._resolve_title(document),
                 content=seg,
                 chunk_index=i,
             ))

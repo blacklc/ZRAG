@@ -12,6 +12,8 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Type
 
+import logging
+
 from rest_framework.exceptions import (
     APIException,
     AuthenticationFailed,
@@ -89,6 +91,7 @@ class DefaultErrorHandler(BaseAPIExceptionHandler):
     """默认异常处理器（兜底）
 
     处理未知异常类型, 返回 500 Internal Server Error。
+    记录完整 traceback 到日志以便排查。
     """
 
     def handle(self, exc: Exception, context: Dict[str, Any]) -> Response:
@@ -102,6 +105,8 @@ class DefaultErrorHandler(BaseAPIExceptionHandler):
         @return: 500 DRF Response 对象
         @rtype:  rest_framework.response.Response
         """
+        _logger = logging.getLogger(__name__)
+        _logger.exception("未预期的异常: %s", exc)
         request = context.get("request")
         request_id = ""
         if request:

@@ -23,11 +23,92 @@ import {
 import { getUserMessage } from '../api/index.js'
 import { useToast } from './useToast.js'
 
-const toast = useToast()
+/**
+ * 构建乐观更新的临时用户消息对象
+ *
+ * 在发送请求前, 先将用户消息追加到消息列表中,
+ * 实现即时显示效果(乐观更新).
+ *
+ * @param {string} query - 用户查询文本 (已 trim)
+ * @returns {{id: string, role: string, content: string, created_at: string}} 临时消息对象
+ */
+function buildOptimisticMessage(query) {
+  return {
+    id: `temp-user-${Date.now()}`,
+    role: 'user',
+    content: query,
+    created_at: new Date().toISOString(),
+  }
+}
+
+/**
+ * 向已有会话提交消息
+ *
+ * 调用后端 API 将消息追加到指定会话中.
+ *
+ * @param {string} conversationId - 会话 ID
+ * @param {string} query - 用户查询文本
+ * @returns {Promise<*>} API 返回结果
+ */
+async function submitMessage(conversationId, query) {
+  return await addMessage(conversationId, query)
+}
+
+/**
+ * 创建新会话并发送首条消息
+ *
+ * 调用后端 API 创建新会话并携带用户首条查询,
+ * 提取并返回后端分配的会话 ID.
+ *
+ * @param {string} query - 用户查询文本
+ * @throws {Error} 当后端未返回会话 ID 时抛出
+ * @returns {Promise<string>} 新建会话的 ID
+ */
+async function createConversationAndSend(query) {
+  const conv = await createConversation(query)
+  const newId = conv?.conversation_id
+  if (!newId) {
+    throw new Error('后端未返回会话 ID')
+  }
+  return newId
+}
+
+/**
+ * 处理发送成功后的状态刷新
+ *
+ * 重新拉取消息列表与会话列表, 使 UI 反映后端最新状态.
+ *
+ * @param {string} conversationId - 会话 ID
+ * @param {Function} loadMessagesFn - 加载消息的回调函数
+ * @param {Function} loadConversationsFn - 加载会话列表的回调函数
+ * @returns {Promise<void>}
+ */
+async function handleSendSuccess(conversationId, loadMessagesFn, loadConversationsFn) {
+  await loadMessagesFn(conversationId)
+  await loadConversationsFn()
+}
+
+/**
+ * 构建错误消息对象
+ *
+ * 当发送失败时, 使用该对象插入一条内联错误消息.
+ *
+ * @param {string} errorMsg - 错误描述文本
+ * @returns {{id: string, role: string, content: string, created_at: string}} 错误消息对象
+ */
+function buildErrorMessage(errorMsg) {
+  return {
+    id: `error-${Date.now()}`,
+    role: 'error',
+    content: errorMsg,
+    created_at: new Date().toISOString(),
+  }
+}
 
 /**
  * 创建并返回聊天业务逻辑复合体
  *
+ * @param {Object} [toastAdapter] - 可选 toast 适配器对象, 需包含 error() 与 success() 方法; 未传入时默认使用 useToast()
  * @returns {{
  *   conversations: import('vue').Ref,
  *   activeConversationId: import('vue').Ref,
@@ -44,7 +125,10 @@ const toast = useToast()
  *   resetConversation: () => void,
  * }}
  */
-export function useChat() {
+export function useChat(toastAdapter) {
+  /** toast 通知, 默认使用 useToast() 实例, 也可通过适配器注入 */
+  const toast = toastAdapter || useToast()
+
   /** 会话列表 */
   const conversations = ref([])
   /** 当前激活的会话 ID; null 表示未选中 */
@@ -140,40 +224,24 @@ export function useChat() {
     if (!text) return
 
     // 乐观追加临时用户消息
-    const tempUserMsg = {
-      id: `temp-user-${Date.now()}`,
-      role: 'user',
-      content: text,
-      created_at: new Date().toISOString(),
-    }
+    const tempUserMsg = buildOptimisticMessage(text)
     messages.value = [...messages.value, tempUserMsg]
     sending.value = true
 
     try {
       if (activeConversationId.value) {
-        await addMessage(activeConversationId.value, text)
-        await loadMessages(activeConversationId.value)
-        await loadConversations()
+        await submitMessage(activeConversationId.value, text)
+        await handleSendSuccess(activeConversationId.value, loadMessages, loadConversations)
       } else {
-        const conv = await createConversation(text)
-        const newId = conv?.conversation_id
-        if (!newId) {
-          throw new Error('后端未返回会话 ID')
-        }
+        const newId = await createConversationAndSend(text)
         activeConversationId.value = newId
-        await loadMessages(newId)
-        await loadConversations()
+        await handleSendSuccess(newId, loadMessages, loadConversations)
       }
     } catch (e) {
       const errorMsg = getUserMessage(e)
       toast.error(`发送失败: ${errorMsg}`)
       // 保留临时用户消息 + 追加内联错误消息
-      messages.value = [...messages.value, {
-        id: `error-${Date.now()}`,
-        role: 'error',
-        content: errorMsg,
-        created_at: new Date().toISOString(),
-      }]
+      messages.value = [...messages.value, buildErrorMessage(errorMsg)]
     } finally {
       sending.value = false
     }

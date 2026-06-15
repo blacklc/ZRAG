@@ -1,69 +1,129 @@
-"""macOS 备忘录数据源实现
+"""macOS 备忘录数据源实现 — 文件桥接模式
 
-通过 AppleScript (osascript) 调用 macOS Notes.app, 获取备忘录内容并转换为 RawDocument。
+通过轮询宿主机导出脚本输出的 result.json 文件，
+读取其中已导出笔记的 JSON 文件并构造 RawDocument。
+不再直接调用 AppleScript（容器内无法执行 osascript）。
 """
 
-import hashlib
-import re
-import subprocess
-from typing import Iterator
+import json
+import logging
+import time
+from pathlib import Path
+from typing import Callable, Iterator, Optional
 
 from zrag.ingest.sources.base import DocumentSource
 from zrag.models.document import RawDocument
 
+logger = logging.getLogger(__name__)
+
 
 class MacNotesSource(DocumentSource):
-    """macOS 备忘录数据源实现
+    """macOS 备忘录数据源 — 文件桥接模式
 
-    通过 AppleScript (osascript) 调用 macOS Notes.app, 获取备忘录内容并转换为 RawDocument。
-    支持按文件夹筛选和全量同步两种模式。
+    在容器化部署环境下，宿主机导出脚本将 macOS Notes 导出为 JSON 文件,
+    MacNotesSource 轮询等待导出完成后读取这些文件。
 
-    @param folder_name: 指定要导出的文件夹名称, 默认为 None 表示导出所有文件夹
-    @type  folder_name: str, optional
-    @param full_sync: 是否全量同步模式, 若为 True 则获取所有备忘录（忽略 folder_name）, defaults to False
-    @type  full_sync: bool, optional
+    @param export_dir: 导出文件目录，默认为 data/pro/export/<task_id>
+    @type  export_dir: str, optional
+    @param poll_interval: 轮询间隔秒数，defaults to 2
+    @type  poll_interval: int, optional
     """
 
-    def __init__(self, folder_name: str | None = None, full_sync: bool = False):
+    def __init__(
+        self,
+        export_dir: str | None = None,
+        poll_interval: int = 2,
+        should_cancel: Optional[Callable] = None,
+    ):
         """构造方法
 
-        @param folder_name: 指定要导出的文件夹名称, 默认为 None 表示导出所有文件夹
-        @type  folder_name: str, optional
-        @param full_sync: 是否全量同步模式, 若为 True 则获取所有备忘录（忽略 folder_name）, defaults to False
-        @type  full_sync: bool, optional
+        @param export_dir: 导出文件目录，未指定时在 fetch_batch 中设置
+        @type  export_dir: str, optional
+        @param poll_interval: 轮询间隔秒数，defaults to 2
+        @type  poll_interval: int, optional
+        @param should_cancel: 取消检查回调，返回 True 时中断轮询等待，defaults to None
+        @type  should_cancel: callable | None, optional
         """
-        self.folder_name = folder_name
-        self.full_sync = full_sync
+        self._export_dir = export_dir
+        self._poll_interval = poll_interval
+        self._total = 0
+        self.should_cancel = should_cancel
 
-    def fetch_batch(self, batch_size: int = 10) -> Iterator[list[RawDocument]]:
-        """分批获取备忘录
+    def fetch_batch(self, batch_size: int = 1) -> Iterator[list[RawDocument]]:
+        """分批获取已导出的笔记
 
-        使用合并的 AppleScript 脚本一次性获取每个文件夹内所有笔记的 ID/名称/正文。
-        full_sync 模式下先获取全部文件夹列表再逐个文件夹导出。
-        单文件夹模式只需一次 osascript 调用。
+        阶段 1: 轮询等待 result.json 文件就绪
+        阶段 2: 读取所有 <note_id>.json 文件，逐篇 yield
 
-        @param batch_size: 每批次最大备忘录数量, defaults to 10
+        @param batch_size: 每批次最大文档数量, defaults to 1
         @type  batch_size: int, optional
 
-        @return: 生成器, 每次 yield 一个 RawDocument 列表
-        @type:   Iterator[list[RawDocument]]
+        @return: 生成器，每次 yield 一个 RawDocument 列表
+        @rtype:   Iterator[list[RawDocument]]
 
-        @raises: AppleScript 调用失败
-        @type:   subprocess.CalledProcessError
+        @raises FileNotFoundError: 导出目录不存在时抛出
+        @raises ValueError: result.json 格式异常时抛出
         """
-        all_documents: list[RawDocument] = []
+        if self._export_dir is None:
+            raise ValueError("export_dir 未设置")
 
-        if self.full_sync or self.folder_name is None:
-            folders = self._get_all_folders()
-        else:
-            folders = [self.folder_name]
+        export_path = Path(self._export_dir)
+        result_file = export_path / "result.json"
 
-        for folder in folders:
-            folder_docs = self._get_folder_data(folder)
-            all_documents.extend(folder_docs)
+        # 阶段 1: 轮询等待 result.json（可被 should_cancel 中断）
+        logger.info("等待 result.json 就绪: %s (轮询间隔: %ds)",
+                    result_file, self._poll_interval)
+        while not result_file.exists():
+            if self.should_cancel and self.should_cancel():
+                raise RuntimeError("任务已被取消，轮询等待中断")
+            time.sleep(self._poll_interval)
+        logger.info("result.json 已就绪")
 
-        for i in range(0, len(all_documents), batch_size):
-            yield all_documents[i:i + batch_size]
+        try:
+            with open(result_file, encoding="utf-8") as f:
+                result = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.exception("读取 result.json 失败: %s", result_file)
+            raise ValueError(f"result.json 格式异常或读取失败: {e}") from e
+
+        if result.get("status") != "ok":
+            raise ValueError(
+                f"导出未正常完成，status={result.get('status')}"
+            )
+
+        self._total = result.get("success", 0)
+        logger.info("导出完成: success=%d expected=%d",
+                    result.get("success", 0), result.get("expected", 0))
+
+        # 阶段 2: 逐篇读取笔记 JSON 文件
+        json_files = sorted(export_path.glob("*.json"))
+        batch: list[RawDocument] = []
+        for filepath in json_files:
+            if filepath.name in ("manifest.json", "result.json"):
+                continue
+
+            try:
+                with open(filepath, encoding="utf-8") as f:
+                    note = json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning("跳过损坏的笔记文件: %s — %s", filepath, e)
+                continue
+
+            doc = RawDocument(
+                source_id=note["source_id"],
+                source_type=note["source_type"],
+                content=note["content"],
+                content_hash=note["content_hash"],
+                metadata=note.get("metadata", {}),
+            )
+            batch.append(doc)
+
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+
+        if batch:
+            yield batch
 
     @property
     def source_type(self) -> str:
@@ -74,176 +134,11 @@ class MacNotesSource(DocumentSource):
         """
         return "mac_notes"
 
-    def _get_all_folders(self) -> list[str]:
-        """获取所有备忘录文件夹名称列表
+    @property
+    def total_count(self) -> int:
+        """获取本次摄取的文档总数
 
-        通过 AppleScript 调用 Notes.app 获取所有文件夹的名称。
-
-        @return: 所有备忘录文件夹名称列表
-        @type:   list[str]
-
-        @raises: AppleScript 调用失败
-        @type:   subprocess.CalledProcessError
+        @return: result.json 中记录的 success 值
+        @type:   int
         """
-        script = """
-tell application "Notes"
-    set folderList to name of folders
-    return folderList
-end tell
-"""
-        output = subprocess.check_output(
-            ["osascript", "-e", script],
-            text=True,
-        )
-        folders = [f.strip() for f in output.strip().split(", ") if f.strip()]
-        return folders
-
-    def _get_folder_data(self, folder_name: str) -> list[RawDocument]:
-        """获取指定文件夹内所有备忘录的完整数据
-
-        通过一次合并的 AppleScript 调用, 批量获取文件夹内所有笔记的 ID、名称和正文,
-        避免逐条获取带来的大量 subprocess 开销。
-
-        AppleScript 返回值格式:
-          每条笔记占一行, id§§§name§§§body
-        行以换行分隔。
-
-        @param folder_name: 文件夹名称
-        @type  folder_name: str
-
-        @return: 该文件夹内所有备忘录的 RawDocument 列表
-        @type:   list[RawDocument]
-
-        @raises: AppleScript 调用失败
-        @type:   subprocess.CalledProcessError
-        """
-        script = f"""
-tell application "Notes"
-    set output to ""
-    repeat with n in notes of folder "{folder_name}"
-        try
-            set output to output & id of n & "§§§" & name of n & "§§§" & body of n & "¶¶¶"
-        end try
-    end repeat
-    return output
-end tell
-"""
-        try:
-            output = subprocess.check_output(
-                ["osascript", "-e", script],
-                text=True,
-            )
-        except subprocess.CalledProcessError:
-            return []
-
-        documents: list[RawDocument] = []
-        for entry in output.strip().split("¶¶¶"):
-            entry = entry.strip()
-            if not entry:
-                continue
-            parts = entry.split("§§§", 2)
-            if len(parts) != 3:
-                continue
-            note_id, note_name, html_body = parts
-            markdown_content = self._html_to_markdown(html_body)
-            content_hash = self._compute_hash(markdown_content)
-            documents.append(RawDocument(
-                source_id=note_id,
-                source_type=self.source_type,
-                content=markdown_content,
-                content_hash=content_hash,
-                metadata={"folder": folder_name, "name": note_name},
-            ))
-        return documents
-
-    def _html_to_markdown(self, html: str) -> str:
-        """将 HTML 转换为 Markdown 格式（纯正则, 无外部依赖）
-
-        覆盖常见场景:
-        - <div> → \\n（块级元素转行）
-        - <br> → \\n
-        - <b>/<strong> → **
-        - <i>/<em> → *
-        - <a href="url">text</a> → [text](url)
-        - <h1>-<h6> → # 前缀
-        - <p> → \\n
-        - 清理多余空白字符
-
-        @param html: 输入的 HTML 字符串
-        @type  html: str
-
-        @return: 转换后的 Markdown 字符串
-        @type:   str
-        """
-        text = html
-
-        # 将 <h1> ~ <h6> 转换为 Markdown 标题
-        for i in range(6, 0, -1):
-            pattern = re.compile(
-                rf"<h{i}[^>]*>(.*?)</h{i}>", re.DOTALL | re.IGNORECASE
-            )
-            text = pattern.sub(r"#" * i + r" \1", text)
-
-        # 将 <a href="url">text</a> 转换为 [text](url)
-        text = re.sub(
-            r'<a\s+[^>]*href="([^"]*)"[^>]*>(.*?)</a>',
-            r"[\2](\1)",
-            text,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-
-        # 将 <b> 和 <strong> 转换为 **
-        text = re.sub(
-            r"<(?:b|strong)[^>]*>(.*?)</(?:b|strong)>",
-            r"**\1**",
-            text,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-
-        # 将 <i> 和 <em> 转换为 *
-        text = re.sub(
-            r"<(?:i|em)[^>]*>(.*?)</(?:i|em)>",
-            r"*\1*",
-            text,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-
-        # 将 <br> 和 <br/> 转换为换行
-        text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
-
-        # 将 <div> 和 </div> 转换为换行
-        text = re.sub(r"</?div[^>]*>", "\n", text, flags=re.IGNORECASE)
-
-        # 将 <p> 和 </p> 转换为换行
-        text = re.sub(r"</?p[^>]*>", "\n", text, flags=re.IGNORECASE)
-
-        # 移除剩余的 HTML 标签
-        text = re.sub(r"<[^>]+>", "", text)
-
-        # 将 HTML 实体解码
-        text = text.replace("&amp;", "&")
-        text = text.replace("&lt;", "<")
-        text = text.replace("&gt;", ">")
-        text = text.replace("&quot;", '"')
-        text = text.replace("&#39;", "'")
-        text = text.replace("&nbsp;", " ")
-
-        # 压缩多余空白字符: 将连续多个空格/换行压缩为单个换行
-        text = re.sub(r"[ \t]+", " ", text)
-        text = re.sub(r"\n{3,}", "\n\n", text)
-        text = text.strip()
-
-        return text
-
-    def _compute_hash(self, content: str) -> str:
-        """计算内容哈希值
-
-        使用 SHA256 对内容进行哈希计算, 用于增量同步时的内容变更检测。
-
-        @param content: 文档内容文本
-        @type  content: str
-
-        @return: SHA256 十六进制哈希字符串
-        @type:   str
-        """
-        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+        return self._total
