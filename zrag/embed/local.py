@@ -49,7 +49,10 @@ class BgeSmallEmbedder(EmbeddingModel):
                     "配置缺失: embedding.model_name 或 embedding.cache_dir, "
                     "请检查 config/embedding.yaml 或设置 MODELS_DIR 环境变量"
                 )
-        self._model = SentenceTransformer(m_name, cache_folder=c_dir)
+        self._model = SentenceTransformer(
+            m_name, cache_folder=c_dir, local_files_only=True,
+        )
+        self._query_instruction = "为这个句子生成表示以用于检索相关文章："
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         """将批量文本转换为 512 维向量
@@ -66,7 +69,7 @@ class BgeSmallEmbedder(EmbeddingModel):
         return self._model.encode(texts, normalize_embeddings=True).tolist()
 
     def embed_query(self, query: str) -> list[float]:
-        """将单条查询转换为 512 维向量
+        """将单条查询转换为 512 维向量, 自动添加 BGE 指令前缀
 
         @param query: 用户输入查询
         @type  query: str
@@ -77,7 +80,7 @@ class BgeSmallEmbedder(EmbeddingModel):
         @raises: 同 embed()
         @type:   Exception
         """
-        return self.embed([query])[0]
+        return self.embed([self._query_instruction + query])[0]
 
     @property
     def dimension(self) -> int:

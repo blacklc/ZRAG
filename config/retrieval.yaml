@@ -1,3 +1,7 @@
 # 检索配置
 retrieval:
   top_k: 10
+  rrf_k: 60
+  rrf_weights:
+    vector: 1.0
+    keyword: 1.0

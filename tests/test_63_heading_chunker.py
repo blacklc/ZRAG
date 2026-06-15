@@ -19,7 +19,7 @@ class TestHeadingChunker:
     """
 
     def setup_method(self):
-        self.chunker = HeadingChunker(levels=[1, 2, 3], max_size=1024, min_size=200, overlap=100)
+        self.chunker = HeadingChunker(levels=[1, 2, 3], max_size=1000, min_size=200, overlap=100)
         self.default_metadata = {"title": "测试文档"}
 
     def _make_document(self, content: str, source_id: str = "test_doc") -> RawDocument:
@@ -252,3 +252,158 @@ class TestHeadingChunker:
         h2_chunks = [c for c in chunks if "H2 Title" in c.content]
         assert len(h2_chunks) > 0
         assert "Doc Title > H1 Title > H2 Title" in h2_chunks[0].content
+
+    def test_tags_appended_to_chunk_content(self):
+        """metadata 中的 tags 列表应拼接到每个 Chunk 的 content 尾部"""
+        doc = RawDocument(
+            source_id="s1",
+            source_type="mac_notes",
+            content="# Title\n\nTags test content with enough length to pass minimum size check for chunk formation.",
+            content_hash="",
+            metadata={"title": "Test", "tags": ["重要", "工作", "project-x"]},
+        )
+        chunks = self.chunker.chunk(doc)
+        assert len(chunks) > 0
+        for c in chunks:
+            assert "\n\n标签: 重要 工作 project-x" in c.content
+
+    def test_tags_empty_list_no_effect(self):
+        """tags 为空列表时，content 不应追加后缀"""
+        doc = RawDocument(
+            source_id="s1",
+            source_type="mac_notes",
+            content="# Title\n\nContent body.",
+            content_hash="",
+            metadata={"title": "Test", "tags": []},
+        )
+        chunks = self.chunker.chunk(doc)
+        assert len(chunks) > 0
+        for c in chunks:
+            assert "\n\n标签:" not in c.content
+
+    def test_tags_non_list_no_effect(self):
+        """tags 为非 list 类型时（如 str），content 不应追加后缀"""
+        doc = RawDocument(
+            source_id="s1",
+            source_type="mac_notes",
+            content="# Title\n\nContent body here.",
+            content_hash="",
+            metadata={"title": "Test", "tags": "重要,工作"},
+        )
+        chunks = self.chunker.chunk(doc)
+        assert len(chunks) > 0
+        for c in chunks:
+            assert "\n\n标签:" not in c.content
+
+    def test_tags_no_tags_key_in_metadata(self):
+        """metadata 中无 tags 键时，content 不应追加后缀"""
+        doc = RawDocument(
+            source_id="s1",
+            source_type="mac_notes",
+            content="# Title\n\nSome content here.",
+            content_hash="",
+            metadata={"title": "Test"},
+        )
+        chunks = self.chunker.chunk(doc)
+        assert len(chunks) > 0
+        for c in chunks:
+            assert "\n\n标签:" not in c.content
+
+    def test_code_fence_not_misidentified_as_heading(self):
+        """代码围栏内的 # 注释行不应被识别为标题"""
+        # 使用小 min_size 避免合并逻辑干扰测试
+        chunker = HeadingChunker(levels=[1, 2, 3], max_size=1000, min_size=10)
+
+        doc_text = """# 真正的标题
+
+这是一段正文内容。
+
+```python
+# 这是 Python 注释，不是标题
+def hello():
+    print("world")
+```
+
+## 另一个真正的标题
+
+更多正文内容。
+"""
+
+        doc = RawDocument(
+            source_id="test-code-fence",
+            source_type="test",
+            content=doc_text,
+            content_hash="",
+            metadata={}
+        )
+
+        chunks = chunker.chunk(doc)
+
+        # 代码块内的 # 不应产生新的 chunk 边界
+        # 应该至少有 "真正的标题" 和 "另一个真正的标题" 两个 chunk
+        assert len(chunks) >= 2, f"Expected >=2 chunks, got {len(chunks)}"
+
+        # 不应有以 "# 这是 Python 注释" 为标题的 chunk
+        for chunk in chunks:
+            assert "Python 注释" not in chunk.content.split('\n')[0]
+
+    def test_nested_code_fence_not_misidentified(self):
+        """嵌套代码围栏（4反引号内含3反引号）内的 # 不被误识别"""
+        # 使用小 min_size 避免合并逻辑干扰测试
+        chunker = HeadingChunker(levels=[1, 2, 3], max_size=1000, min_size=10)
+
+        doc_text = """# 文档标题
+
+这是一段正文内容。
+
+````markdown
+下面是一个代码示例：
+```python
+# 嵌套代码块中的注释
+x = 1
+```
+````
+
+## 正常标题
+
+正文内容。
+"""
+
+        doc = RawDocument(
+            source_id="test-nested-fence",
+            source_type="test",
+            content=doc_text,
+            content_hash="",
+            metadata={}
+        )
+
+        chunks = chunker.chunk(doc)
+
+        # 应该至少有 2 个 chunk："文档标题" 和 "正常标题"
+        assert len(chunks) >= 2, f"Expected >=2 chunks, got {len(chunks)}"
+
+        # 代码块内的 # 不应被识别
+        for chunk in chunks:
+            first_line = chunk.content.strip().split('\n')[0]
+            assert "嵌套代码块" not in first_line
+
+    def test_tags_fallback_no_headings(self):
+        """无标题回退场景下，tags 仍应拼接到 Chunk content 尾部"""
+        content = (
+            "This is a document without any markdown headings. "
+            "It needs to be long enough to trigger chunking into multiple pieces. "
+            "We add more text here to make sure it passes the minimum length check. "
+            "Additional content continues here. And more text follows."
+        )
+        doc = RawDocument(
+            source_id="s1",
+            source_type="mac_notes",
+            content=content,
+            content_hash="",
+            metadata={"title": "No Headings", "tags": ["fallback", "tag-test"]},
+        )
+        small_chunker = HeadingChunker(levels=[1, 2, 3], max_size=150, min_size=50, overlap=20)
+        chunks = small_chunker.chunk(doc)
+        assert len(chunks) > 0
+        for c in chunks:
+            assert "\n\n标签: fallback tag-test" in c.content

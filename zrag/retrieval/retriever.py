@@ -8,6 +8,7 @@ import logging
 
 from zrag.embed.base import EmbeddingModel
 from zrag.models.retrieval import SearchResult
+from zrag.retrieval.query_rewriter import QueryRewriter
 from zrag.store.sqlite_store import SQLiteStore
 from zrag.store.vector_store import ChromaStore
 
@@ -33,6 +34,8 @@ class Retriever:
         sqlite_store: SQLiteStore,
         chroma_store: ChromaStore,
         embedder: EmbeddingModel,
+        config: dict | None = None,
+        query_rewriter: QueryRewriter | None = None,
     ):
         """构造方法
 
@@ -42,6 +45,10 @@ class Retriever:
         @type  chroma_store: ChromaStore
         @param embedder: Embedding 模型实例
         @type  embedder: EmbeddingModel
+        @param config: 检索配置字典, 若为 None 则从 settings 读取
+        @type  config: dict | None
+        @param query_rewriter: 查询改写器实例, 为 None 时不进行查询改写
+        @type  query_rewriter: QueryRewriter | None, optional
         """
         self.sqlite_store = sqlite_store
         self.chroma_store = chroma_store
@@ -51,13 +58,28 @@ class Retriever:
                 f"embedder 必须是 EmbeddingModel 的子类，实际类型: {type(embedder).__name__}"
             )
 
+        self.query_rewriter = query_rewriter
+        if query_rewriter is not None and not isinstance(query_rewriter, QueryRewriter):
+            raise TypeError(
+                f"query_rewriter 必须是 QueryRewriter 的实例，实际类型: {type(query_rewriter).__name__}"
+            )
+
+        # 加载 RRF 配置（防御性读取: 缺失时使用默认值）
+        if config is None:
+            from zrag.settings import ZRAG_RETRIEVAL
+            config = ZRAG_RETRIEVAL
+        self.rrf_k = float(config.get('rrf_k', 60))
+        w = config.get('rrf_weights', {})
+        self.w_vector = float(w.get('vector', 1.0))
+        self.w_keyword = float(w.get('keyword', 1.0))
+
     def hybrid_search(self, query: str, k: int = 10) -> list[SearchResult]:
         """混合检索: ChromaDB 向量检索 + SQLite FTS5 关键词检索 -> RRF 融合
 
         1. embedder.embed_query(query) 获取查询向量
         2. chroma_store.similarity_search(query_vector, k) 获取向量检索结果
         3. sqlite_store.search_fts5(query, k) 获取关键词检索结果
-        4. RRF 融合: score(d) = 1/(60 + rank_vector) + 1/(60 + rank_bm25)
+        4. RRF 融合: score(d) = w_vector / (rrf_k + rank_vector) + w_keyword / (rrf_k + rank_bm25)
         5. 按 RRF score 降序排列, 返回 top-k
 
         @param query: 用户输入的查询字符串
@@ -69,9 +91,18 @@ class Retriever:
                  每个结果包含 chunk_id / content / doc_title / source_id / source_type / score
         @type:   list[SearchResult]
         """
-        query_vector = self.embedder.embed_query(query)
-        vector_results = self.chroma_store.similarity_search(query_vector, k)
-        keyword_results = self.sqlite_store.search_fts5(query, k)
+        if self.query_rewriter is not None:
+            rewritten = self.query_rewriter.rewrite(query)
+            fts5_query = rewritten['keywords']
+            vector_query = rewritten['refined_query']
+        else:
+            fts5_query = query
+            vector_query = query
+
+        query_vector = self.embedder.embed_query(vector_query)
+        expand_k = k * 2
+        vector_results = self.chroma_store.similarity_search(query_vector, expand_k)
+        keyword_results = self.sqlite_store.search_fts5(fts5_query, expand_k)
 
         vector_ranks = self._build_vector_ranks(vector_results)
         keyword_ranks = self._build_keyword_ranks(keyword_results)
@@ -118,14 +149,14 @@ class Retriever:
             for i, kr in enumerate(keyword_results)
         }
 
-    @staticmethod
     def _compute_rrf_scores(
+        self,
         vector_ranks: dict[str, int],
         keyword_ranks: dict[str, int],
     ) -> dict[str, float]:
         """计算 RRF 融合分数
 
-        RRF 公式: score(d) = 1/(60 + rank_vector) + 1/(60 + rank_bm25)
+        RRF 公式: score(d) = w_vector / (rrf_k + rank_vector) + w_keyword / (rrf_k + rank_bm25)
         若某篇文档仅出现在一个检索方式中, 则另一个 rank 视为无穷大,
         对应分数项为 0。
 
@@ -142,7 +173,7 @@ class Retriever:
         for chunk_id in all_chunk_ids:
             rank_v = vector_ranks.get(chunk_id, float('inf'))
             rank_k = keyword_ranks.get(chunk_id, float('inf'))
-            score = 1.0 / (60.0 + rank_v) + 1.0 / (60.0 + rank_k)
+            score = self.w_vector / (self.rrf_k + rank_v) + self.w_keyword / (self.rrf_k + rank_k)
             scores[chunk_id] = score
         return scores
 

@@ -353,15 +353,21 @@ class IngestReport:
 
 ## 2.2 混合检索器
 
-Retriever 融合两种互补的检索方式：语义相似度检索（ChromaDB Cosine）和关键词匹配检索（SQLite FTS5 BM25），通过 RRF（Reciprocal Rank Fusion）算法合并排序结果。
+Retriever 融合两种互补的检索方式：语义相似度检索（ChromaDB Cosine）和关键词匹配检索（SQLite FTS5 BM25），通过加权 RRF（Reciprocal Rank Fusion）算法合并排序结果。检索前通过查询改写（QueryRewriter）将用户口语化查询转化为关键词列表和精炼查询，分别传入两条检索路径。
 
 ```
-用户查询 "Python 装饰器"
+用户查询 "怎么让 Python 跑得更快"
         │
-        ├──▶ embed_query() → 查询向量 (512-dim)
+        ▼
+    QueryRewriter.rewrite(query)
+        │
+        ├──▶ keywords: "Python 性能优化 加速"
+        └──▶ refined_query: "Python 程序性能优化方法"
+        │
+        ├──▶ embed_query(refined_query) → 查询向量 (512-dim)
         │         │
         │         ▼
-        │    ChromaDB.similarity_search(k=10)
+        │    ChromaDB.similarity_search(k=20, 候选池×2)
         │         │
         │         ▼
         │    [chunk_A: dist=0.12, chunk_B: dist=0.34, ...]
@@ -369,7 +375,7 @@ Retriever 融合两种互补的检索方式：语义相似度检索（ChromaDB C
         │         ▼
         │    rank_vector: {A:1, B:2, ...}
         │
-        ├──▶ SQLite FTS5 bm25("Python 装饰器", k=10)
+        ├──▶ SQLite FTS5 bm25("Python 性能优化 加速", k=20)
         │         │
         │         ▼
         │    [chunk_B: bm25=-4.2, chunk_C: bm25=-3.1, ...]
@@ -378,17 +384,19 @@ Retriever 融合两种互补的检索方式：语义相似度检索（ChromaDB C
         │    rank_keyword: {B:1, C:2, ...}
         │
         ▼
-    RRF 融合: score(d) = 1/(60+rank_vector) + 1/(60+rank_keyword)
+    加权 RRF 融合: score(d) = w_vector/(60+rank_vector) + w_keyword/(60+rank_keyword)
         │
         ▼
-    按 RRF score 降序 → top-k 结果
+    按 RRF score 降序 → 截取 top-10 结果
 ```
 
 ### 设计理念
 
 **为何需要混合检索**。知识库中的文档内容包含两类截然不同的信息：一类是可以用近义词、同义表达来描述的语义概念（如"代码优化方法"和"提升程序效率"指向相同含义）；另一类是人名、地名、技术术语、错误码等专有名词，这些词汇没有同义词，必须通过精确匹配才能定位。纯向量检索（基于 Embedding 的 Cosine 相似度）的优势在于捕捉语义相近但用词不同的内容，但对于专有名词和精确编码——如"ERR_CONN_REFUSED"、函数名"acquire_scaling_lock"——Embedding 模型对这些短文本的向量表示区分度有限，检索效果往往不如直接的关键词匹配。纯关键词检索（SQLite FTS5 BM25）对专有名词的匹配非常精准，但无法处理"用户查询用词与文档用词不同但语义相同"的情况。从这两种检索方式的特性可以看出，它们天然互补——语义检索覆盖面广但精确度有上限，关键词检索精度高但覆盖面窄。因此，ZRAG 将两者并行执行，然后通过融合算法整合结果，使最终返回的 top-k 文档片段同时受益于两条检索路径的各自优势。
 
-**为何选择 RRF 而非加权求和**。在融合两种检索方式的结果时，最直观的方案是为语义检索的结果分数和关键词检索的结果分数各自分配一个权重，然后加权求和进行排序（score = alpha * cosine_score + beta * bm25_score）。然而，向量检索的 Cosine 距离（取值范围通常为 [0, 1] 或 [0, 2]）和 BM25 分数（取值无上界，受文档长度和词频影响极大）的量纲完全不同——Cosine 距离在 0.1 的差异就可能意味着高度相关与无关的区别，而 BM25 分数从 -5 到 -10 的跨度在同一次查询中属于正常波动。在这种量纲不一致的前提下，无论 alpha 和 beta 如何取值，融合结果都会偏向其中一侧——本质上是两种分数的"不可比性"导致的必然问题。基于上述分析，RRF（Reciprocal Rank Fusion）提供了一种不依赖原始分数绝对值、仅依赖排名位置的融合方案：将每种检索方式的结果按相关性降序排列后，每个文档的 RRF 分数仅由它在各检索路径中的排名决定，与原始分数的数值大小无关。这就天然消除了量纲差异问题——无论 Cosine 距离是 0.01 还是 0.99，也无论 BM25 是 -2 还是 -20，它们只通过排名位置参与融合。此外，RRF 算法还在融合过程中自然实现了去重——同一个文档片段如果同时出现在两条检索路径的结果中，它会在两边的排名列表中各有一个位置，最终 RRF 分数是两边排名的倒数之和，排名越靠前（同时被两种检索方式认可），融合后的分数越高。
+**为何选择 RRF 而非加权求和**。在融合两种检索方式的结果时，最直观的方案是为语义检索的结果分数和关键词检索的结果分数各自分配一个权重，然后加权求和进行排序（score = alpha * cosine_score + beta * bm25_score）。然而，向量检索的 Cosine 距离和 BM25 分数的量纲完全不同——Cosine 距离在 0.1 的差异就可能意味着高度相关与无关的区别，而 BM25 分数从 -5 到 -10 的跨度在同一次查询中属于正常波动。在这种量纲不一致的前提下，无论 alpha 和 beta 如何取值，融合结果都会偏向其中一侧——本质上是两种分数的"不可比性"导致的必然问题。基于上述分析，RRF（Reciprocal Rank Fusion）提供了一种不依赖原始分数绝对值、仅依赖排名位置的融合方案：将每种检索方式的结果按相关性降序排列后，每个文档的 RRF 分数仅由它在各检索路径中的排名决定，与原始分数的数值大小无关。这就天然消除了量纲差异问题。
+
+在 RRF 基础上，ZRAG 进一步引入了可配置的路径权重——`score(d) = w_vector/(k+rank_vector) + w_keyword/(k+rank_keyword)`。权重通过 `config/retrieval.yaml` 中的 `rrf_weights.vector` 和 `rrf_weights.keyword` 配置（默认等权 1.0）。引入查询改写后，两条路径的输入各自针对其检索方式做了优化（关键词→FTS5，精炼查询→向量），但不同知识库语料特征下两类检索的贡献度可能不同——技术文档密集的语料关键词检索贡献更大，随笔记录居多的语料向量检索贡献更大。可配置权重使运维者能按语料特征调整融合偏向，而不改变等权默认值下的标准 RRF 行为。
 
 **常数 k=60 的依据**。RRF 公式中使用常数 k 的目的是平滑极端排名差异——如果某文档在向量检索中排名第 1（rank=1），但在关键词检索中未出现（rank 视为 infinity），如果没有 k 的缓冲，该文档的 RRF 分数完全由 1/1 主导，与排名第 2 的文档（1/2=0.5）差距过大。k=60 使排名第 1 的项分数为 1/(60+1)≈0.0164，排名第 2 为 1/(60+2)≈0.0161，差距被平滑到合理范围。k=60 这个取值来源于 RRF 原论文（Cormack et al., 2009）的实验结果——论文在 TREC 数据集上测试了 k 从 0 到 1000 的多个取值，k=60 在大多数查询场景下取得最优效果。ZRAG 直接采用这一业界经验值，不做额外的参数调优。
 
@@ -396,6 +404,8 @@ RRF 的核心特点：
 - 不需要对不同检索方式的原始分数做归一化
 - 自动融合排名信息，两种检索方式的结果自然去重
 - 常数 k=60 用于平滑极端排名差异
+- 可配置权重 w_vector / w_keyword，按语料特征调整融合偏向，默认等权
+- 候选池扩大至 k×2，避免遗漏单路径认可的优质结果
 
 ## 2.3 RAG 问答流程
 
@@ -869,9 +879,11 @@ class EmbeddingModel(ABC):
 
 第一，性能差异。文档摄入阶段（见第 5 章）需要对一个批次中所有 chunk 的文本内容进行向量化。如果将 embed_query 当作通用接口，逐条调用 `encode()` 编码每条 chunk，每一条调用都需要独立的 tokenization、模型前向传播和结果后处理——以 100 个 chunk 为例，就是 100 次模型推理。而批量调用 `embed(texts)` 将多条文本合并为 batch，模型在一个 batch 内完成矩阵运算——GPU 上的并行优势明显，CPU 上也因为 NumPy/SciPy 的底层 BLAS 优化而比逐条循环快数倍。对于摄入流程来说，这个性能差距直接决定了处理 500 篇文档需要 2 分钟还是 10 分钟。
 
-第二，语义差异。某些高级 Embedding 模型（如 BGE 系列的指令版本、E5 系列）对查询（query）和文档（document）使用不同的编码策略——查询侧可能添加 "Represent this sentence for searching relevant passages:" 前缀，文档侧可能添加 "Represent this paragraph:" 前缀，以引导模型对不同角色文本产生更合适的向量表示。虽然 bge-small-zh-v1.5 对 query 和 document 的编码策略一致，但保留这两个分离的方法意味着未来切换到需要不对称编码的模型时，不需要修改调用方代码——只需在 `embed_query()` 内部添加 query prefix 即可。
+第二，语义差异。BGE 系列模型对查询（query）和文档（document）使用不同的编码策略——查询侧需要添加指令前缀以引导模型产生更合适的查询向量表示。官方推荐的中文指令前缀为 `"为这个句子生成表示以用于检索相关文章："`，英文指令前缀为 `"Represent this sentence for searching relevant passages: "`。这套不对称编码策略的设计意图是：查询通常是简短的自然语言问题，而文档是较长的段落正文——两者在语言结构上存在天然差异。指令前缀告知模型当前输入的"角色"是查询而非文档，使模型在向量空间中为同一语义概念的不同表达形式（查询 vs 文档）生成更接近的向量表示，从而提升语义检索的召回质量。
 
-因此，ABC 中将两者定义为独立方法：`embed(texts)` 接收列表批量编码，用于摄入流程；`embed_query(query)` 接收单条字符串编码，用于检索流程。语义清晰，互不混淆。
+BGE v1.5 系列相较于 v1.0 大幅降低了对指令前缀的依赖——不使用指令时检索质量下降约 1-5%，而非 v1.0 中的显著下降。但对于 ZRAG 的 s2p（short query to long passage）检索场景，指令前缀仍有正向收益且零额外成本——它仅是一个字符串拼接操作。文档侧（`embed()`）不添加任何前缀，因为文档块在训练阶段本身就是无前缀编码的。
+
+因此，ABC 中将两者定义为独立方法：`embed(texts)` 接收列表批量编码，用于摄入流程，不加前缀；`embed_query(query)` 接收单条字符串编码，拼接指令前缀后向量化，用于检索流程。
 
 ```python
 class BgeSmallEmbedder(EmbeddingModel):
@@ -934,6 +946,9 @@ class BgeSmallEmbedder(EmbeddingModel):
     def embed_query(self, query: str) -> list[float]:
         """将单条查询转换为 512 维向量
 
+        对查询文本拼接 BGE 中文指令前缀后编码，
+        文档侧 embed() 不添加前缀，实现不对称编码。
+
         @param query: 用户输入查询
         @type  query: str
 
@@ -943,7 +958,8 @@ class BgeSmallEmbedder(EmbeddingModel):
         @raises: 同 embed()
         @type:   Exception
         """
-        return self.embed([query])[0]
+        instruction = "为这个句子生成表示以用于检索相关文章："
+        return self.embed([instruction + query])[0]
 
     @property
     def dimension(self) -> int:
@@ -1214,13 +1230,13 @@ class RawDocument:
 | `source_type` | string | 固定为 `"mac_notes"` |
 | `content` | string | 笔记正文，Markdown 格式。由导出脚本负责 HTML→Markdown 转换 |
 | `content_hash` | string | SHA256 哈希值，由导出脚本在导出时预计算 |
-| `metadata` | dict | 保留字段，当前内容为空 `{}`，后续可扩展 |
+| `metadata` | dict | 笔记元信息，包含 `title`（笔记标题）、`folder`（所属文件夹）、`tags`（标签列表）。后续可扩展更多字段 |
 
 设计要点：
 - 与 RawDocument 字段一一对应，MacNotesSource 读取后可直接构造 RawDocument，无需手动映射
 - `content_hash` 由导出脚本预计算并填入，避免容器侧重复 I/O
 - `content` 为 Markdown 格式（由导出脚本的 HTML→Markdown 转换保证），容器侧接收后可直接分块
-- `name`（笔记标题）和 `folder`（所属文件夹）不单独作为顶层字段，当前摄入流程不依赖这些信息。后续如有需要可加入 `metadata`
+- `metadata` 中包含 `title`（笔记标题）、`folder`（所属文件夹）和 `tags`（标签列表）。title 用于构建 chunk 的 `doc_title` 字段，tags 参与 FTS5 全文索引以增强关键词检索覆盖面
 
 #### manifest.json 结构
 
@@ -1268,6 +1284,16 @@ data/pro/export/<task_id>/
 
 > 注意：文件桥接方案是容器化部署的适配层。在非容器化的开发环境中，MacNotesSource 仍然可以直接通过 AppleScript 调用 Notes.app，两种模式通过配置项切换，共享同一套后续处理流程（分块、向量化、双库写入）。
 
+### Unicode 规范化
+
+**为何需要 NFC 规范化**。Unicode 标准中，同一个字符可以有多种编码方式：NFC（Normalization Form Canonical Composition，组合形式）将字符表示为单个码点，NFD（Normalization Form Canonical Decomposition，分解形式）将字符拆分为基础字符加组合用附加符号。例如 `é` 在 NFC 下为单个码点 `U+00E9`，在 NFD 下为 `e`（`U+0065`）+ 重音符（`U+0301`）两个码点。两种编码人眼看到的文字完全一致，但字节序列不同。
+
+对于 ZRAG，编码不一致会引发三个链路问题。第一，`content_hash`（SHA256）基于字节序列计算——内容相同但编码形式不同的两篇文章，摘要完全不同，增量摄入时会被错误判定为"已修改"，触发不必要的重新处理。第二，FTS5 全文索引对令牌（token）的匹配依赖于字节级的精确相等——用 NFC 形式的关键词搜不到 NFD 形式索引的同一内容，导致 Path A 关键词检索漏召回。第三，Embedding 模型对语义相同但字节序列不同的文本会产生在高维空间中距离增大的向量表示（虽非完全无关，但相似度低于预期），影响 Path B 语义检索的召回精度。
+
+**macOS 的 NFD 倾向**。macOS 的 HFS+ 文件系统历史上默认使用 NFD 编码存储文件名和文本，而 web 页面复制的内容通常是 NFC。这意味着同一篇备忘录中可能混入两种编码——用户从网页粘贴的部分是 NFC，在 macOS 原生环境中创建的部分可能是 NFD。导出阶段是统一编码形式的最佳时机——在此节点统一转换后，下游的哈希计算、FTS5 索引和 Embedding 都使用一致的 NFC 文本。
+
+**决策**。在 `export_notes.py` 获取文本内容后，统一调用 `unicodedata.normalize('NFC', text)` 将全部文本（content、title、folder、tags）转为 NFC 组合形式。与直接使用 `locale.strxfrm`（部分 Unix/Linux 系统中采用 NFD 作为默认规范化形式，可能与 macOS 的 NFD 默认倾向一致但在容器 Linux 环境中行为不同）相比，显式的 NFC 规范化可以消除跨平台差异。这是一个零成本的数学变换，不改变文本的语义内容，不损失任何信息。
+
 ## 5.3 ChunkingStrategy ABC
 
 ### 设计理念
@@ -1295,13 +1321,15 @@ CompositeChunker 将"结构策略"（如按标题、按段落）和"兜底策略
 
 参数：
 - **levels**: [1, 2, 3] — H1-H3 作为切分边界
-- **max_size**: 1024 字符 — 单 chunk 上限
+- **max_size**: 1000 字符 — 单 chunk 上限。统一设为 1000（含 HeadingChunker、CompositeChunker、RecursiveCharacterChunker），使最终入库的 chunk 既充分利用 BGE-small 模型 512 token（≈800-1000 中文字符）的上下文窗口，又不至于因过长而被截断向量化导致尾部信息丢失
 - **overlap**: 100 字符 — 超长段二次切分时的重叠字符数
 - **min_size**: 200 字符 — 过短相邻 chunk 的合并阈值
 
-HeadingChunker 通过 CompositeChunker 与 RecursiveCharacterChunker 组合使用：`CompositeChunker(HeadingChunker, RecursiveCharacterChunker)`。首先由 HeadingChunker 按标题层级切分，超出 max_size 的段由 RecursiveCharacterChunker 递归切割。当文档不含任何 Markdown 标题时，HeadingChunker 回退到 RecursiveCharacterChunker 作为默认行为。
+HeadingChunker 通过 CompositeChunker 与 RecursiveCharacterChunker 组合使用：`CompositeChunker(HeadingChunker, RecursiveCharacterChunker, max_size=1000)`。首先由 HeadingChunker 按标题层级切分，超出 max_size 的段由 RecursiveCharacterChunker 递归切割。当文档不含任何 Markdown 标题时，HeadingChunker 回退到 RecursiveCharacterChunker 作为默认行为。CompositeChunker 的 max_size 必须与 HeadingChunker 对齐——若 CompositeChunker 的 max_size 小于 HeadingChunker 的 max_size，则 HeadingChunker 切出的几乎所有段都会被判定为"超长"并触发回退切分，标题切分结果名存实亡。
 
 该策略当前仅适用于 `mac_notes` 数据源。
+
+**为何需要规避代码围栏内的 `#`**。HeadingChunker 使用正则表达式 `^(#{1,3})\s+`（`re.MULTILINE` 模式）来检测 Markdown 标题边界。但 Markdown 代码围栏（`` ``` `` 包裹的代码块）内可能包含注释行——例如 Python 中的 `# this is a comment`、Shell 中的 `#!/bin/bash`、YAML 中的 `# key: value`——这些行的 `#` 在源代码语义中并非标题，但在正则表达式的视角下与 Markdown H1 标题完全不可区分。如果在代码围栏内产生虚假标题检测，会导致代码块被错误截断，产生无意义的 chunk。因此在扫描标题前，先识别并跳过代码围栏区域，仅对非围栏区域的文本行执行标题检测。
 
 **为何 chunk_index 是必填字段**。chunk_index 记录了当前分块在原始文档中的位置序号（从 0 开始递增）。这个字段的用途不止于排序展示——在检索结果中，如果同一篇文档的多个 chunk 被匹配到（如 chunk[2] 和 chunk[5]），检索层可以通过 chunk_index 将它们按原文顺序重建，使发送给 LLM 的上下文材料保持原文的叙事逻辑。另一个场景是：用户要求"查看原文上下文"，系统可以通过 chunk_index 加载该 chunk 前后相邻的几个 chunk 作为扩展上下文返回。如果没有 chunk_index，分块就失去了在原文中的位置信息，上述两个场景都无法实现。
 
@@ -1387,7 +1415,8 @@ Pipeline 是摄入流程的编排器，负责串联 Source → Chunk → Embed �
 
 ```
 用户提问
-  → Retriever.hybrid_search(query, k=10) → list[SearchResult]
+  → QueryRewriter.rewrite(query) → {keywords, refined_query}  ← 新增: 查询改写
+  → Retriever.hybrid_search(keywords, refined_query, k=10)      ← k×2 候选池
   → PromptBuilder.build_rag_prompt(query, results) → list[dict]
   → LLMProvider.chat(messages) → 回答
 ```
@@ -1411,6 +1440,20 @@ $$score(d) = \frac{1}{60 + rank_{vector}(d)} + \frac{1}{60 + rank_{keyword}(d)}$
 其中，若文档 d 仅出现在某一条检索路径中，另一路径的 rank 视为无穷大（对应分数项为 0）。
 
 **为何 k=60 而非其他值**。RRF 公式中常数 k 的作用是平滑极端排名差异——如果某文档在向量检索中排名第 1（rank=1），但在关键词检索中未出现（rank 视为无穷大），没有 k 的缓冲时该文档的 RRF 分数完全由 1/1=1.0 主导，与排名第 2 的文档（1/2=0.5）差距过大。k=60 使排名第 1 的项分数为 1/(60+1)≈0.0164，排名第 2 为 1/(60+2)≈0.0161，差距被平滑到合理范围。k=60 这个取值来源于 RRF 原论文（Cormack et al., 2009）的实验结果——论文在多个 TREC 数据集上测试了 k 从 0 到 1000 的多个取值，k=60 在大多数查询场景下取得了最优的排序质量。k 值越大，排名差异越平滑但区分度越低；k 值越小，排名差异越突出但极端值的敏感度越高。ZRAG 直接采用这一经过学术实验验证的业界经验值，不做额外的参数调优。
+
+**为何在检索前引入查询改写（Query Rewriting）**。用户日常输入的自然语言问题往往带有口语化特征——简称、省略、非正式表达（如"怎么让 Python 跑得更快"而非"Python 程序性能优化方法"）。如果直接将原始查询原样传入向量检索和关键词检索，检索系统面对的是非标准化的表达，召回质量受用户措辞习惯影响很大。
+
+查询改写（Query Rewriting）在检索之前引入一次轻量 LLM 调用，将用户的口语化问题改写为两种互补的产出物：（1）**关键词列表**，抽取出用于精确匹配的专有名词、技术术语和核心概念，直接拼接后传入 FTS5 MATCH 做关键词检索——不再走 jieba 分词，因为 LLM 已经按语义边界拆分好了干净的搜索词；（2）**精炼自然语言查询**，将口语化表达提炼为完整规范的自然语言表述，传给 `embed_query()` 做语义向量检索。改写采用 Jinja2 模板（`query_rewrite.j2`），LLM 返回结构化 JSON `{"keywords": "...", "refined_query": "..."}`，全部查询均执行改写（不做复杂度判断以保持逻辑简洁统一）。
+
+查询改写增加了约 0.5-1 秒的额外 LLM 调用延迟，但通过提升两条检索路径的输入质量，换取的召回精度提升远超过延迟代价。QueryRewriter 通过依赖注入传入 Retriever，与 LLM Provider 解耦。
+
+**为何候选池扩大至 k×2**。在原始设计中，两条检索路径各取 k 个候选直接进行 RRF 融合。这意味着若某 chunk 在路径 A 排名第 11、路径 B 排名第 3，它在 RRF 融合时路径 A 贡献为 0（排名超出前 k），整体 RRF 分数可能进不了最终 top-k——即使它在其中一条路径上被高度认可。将各路径的候选数扩大为 k×2（即各取 top-20），RRF 在更宽的候选池上计算排名分数后再截取最终 top-k（10 个），不遗漏"只有一条路径认可"的优质结果。k×2 是经验值——再大（如 k×3）的边际收益递减且增加不必要的计算和存储开销，再小（如 k×1.5）则候选池扩宽效果不足。
+
+**为何引入 RRF 可配置权重**。引入查询改写后，关键词路径的输入从原始口语化查询变为 LLM 提炼的关键词列表，向量路径的输入变为精炼自然语言查询——两条路径的输入质量都得到了提升，且各自更适配对应检索方式的特点。但在不同知识库语料特征下，两类检索方式的贡献度可能不完全相等——例如文档内容偏重技术文档（术语密度高）时关键词检索贡献更大，偏重随笔记录（语义松散）时向量检索贡献更大。因此将 RRF 融合公式扩展为加权形式：
+
+$$score(d) = w_{vector} \cdot \frac{1}{60 + rank_{vector}(d)} + w_{keyword} \cdot \frac{1}{60 + rank_{keyword}(d)}$$
+
+权重通过 `config/retrieval.yaml` 中的 `rrf_weights.vector` 和 `rrf_weights.keyword` 配置，默认等权（均为 1.0），与原始 RRF 行为一致。需要时调整比例即可，无需修改代码。
 
 **为何 vector_results 中独有的 chunk 需回查 SQLite**。在构建最终检索结果时，_build_results 方法需要为每个 chunk 填充完整的 content 和元数据。keyword_results 来自 SQLite FTS5 的 JOIN 查询，结果中直接包含了 content、doc_title、source_id 等完整字段，可以直接使用。但 vector_results 来自 ChromaDB 的 similarity_search，其返回的 metadata 中仅存储了 source_id、source_type、doc_title 和 chunk_index——**不包含 content 字段**。这是因为 ChromaDB 的 Collection 设计上 metadata 用于过滤和展示辅助信息，将大段的 chunk 原文存入 metadata 会显著增加 ChromaDB 的存储开销和序列化成本。chunk 的原文（content）仅在 SQLite 的 chunks 表中持久化存储。因此，对于仅在 vector_results 中出现但不在 keyword_results 中的 chunk（即被语义检索发现但未被关键词检索命中的 chunk），必须通过其 chunk_id 回查 SQLite 的 chunks 表获取 content。这是一个"以 SQLite 为可信数据源"的设计原则在检索环节的自然延伸。
 
@@ -1459,24 +1502,26 @@ class Retriever:
         self.embedder = embedder
 
     def hybrid_search(self, query: str, k: int = 10) -> list[SearchResult]:
-        """混合检索: ChromaDB 向量检索 + SQLite FTS5 关键词检索 -> RRF 融合
+        """混合检索: 查询改写 → 向量检索 + FTS5 关键词检索 → 加权 RRF 融合
 
         流程:
-        1. embedder.embed_query(query) 获取查询向量
-        2. chroma_store.similarity_search(query_vector, k) 获取向量检索结果
-        3. sqlite_store.search_fts5(query, k) 获取关键词检索结果
-        4. 构建两路排名映射: chunk_id -> rank
-        5. RRF 融合: score(d) = 1/(60 + rank_vector) + 1/(60 + rank_keyword)
-        6. 构建 SearchResult 列表, 按 RRF score 降序排列, 返回 top-k
+        1. query_rewriter.rewrite(query) 获取 {keywords, refined_query}
+        2. embedder.embed_query(refined_query) 获取查询向量（已含指令前缀）
+        3. chroma_store.similarity_search(query_vector, k * 2) 获取向量候选
+        4. sqlite_store.search_fts5(keywords, k * 2) 获取关键词候选
+        5. 构建两路排名映射: chunk_id -> rank
+        6. 加权 RRF 融合: score = w_vector/(k_rrf+rank_vector) + w_keyword/(k_rrf+rank_keyword)
+        7. 构建 SearchResult 列表, 按 RRF score 降序排列, 截取 top-k
 
-        @param query: 用户输入的查询字符串
-        @param k:     返回结果的最大数量, defaults to 10
+        @param query: 用户输入的原始查询字符串（口语化）
+        @param k:     最终返回结果的最大数量, defaults to 10
 
-        @return: 按 RRF 融合分数降序排列的检索结果列表
+        @return: 按加权 RRF 融合分数降序排列的检索结果列表
         """
-        query_vector = self.embedder.embed_query(query)
-        vector_results = self.chroma_store.similarity_search(query_vector, k)
-        keyword_results = self.sqlite_store.search_fts5(query, k)
+        rewritten = self.query_rewriter.rewrite(query)
+        query_vector = self.embedder.embed_query(rewritten['refined_query'])
+        vector_results = self.chroma_store.similarity_search(query_vector, k * 2)
+        keyword_results = self.sqlite_store.search_fts5(rewritten['keywords'], k * 2)
 
         vector_ranks = self._build_vector_ranks(vector_results)
         keyword_ranks = self._build_keyword_ranks(keyword_results)

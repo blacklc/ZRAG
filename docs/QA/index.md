@@ -10,6 +10,7 @@
 | [存储与 Embedding](storage-embedding.md) | Embedding 模型、ChromaDB、SQLite FTS5、数据一致性、数据模型汇总 |
 | [检索与 LLM](retrieval-llm.md) | RRF 融合、Retriever、Prompt 构建、LLM Provider 实现 |
 | [混合检索准确度优化](hybrid-search-accuracy.md) | 检索召回不足问题诊断、HTML→Markdown 转换增强、HeadingChunker、jieba 中文分词、同源合并方案 |
+| [RAG 回答质量优化](rag-quality-optimization.md) | 导入管线数据质量优化、切分参数统一、查询改写、RRF 权重、候选池扩大 |
 | [API 与会话管理](api-config.md) | API 设计、配置文件、会话存储、BGE 维度修正 |
 | [前端与部署运维](frontend-deploy.md) | Web UI 设计、容器化部署、跨平台构建、日志分级、Prompt 模板 |
 

@@ -132,13 +132,45 @@
 
 ---
 
+## 新增切片（#101-#108）— RAG 回答质量优化
+
+### 方向 1：导入管线优化
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 101 | 切分参数统一 max_size=1000 | AFK | 11 |
+| 102a | tags 导出 + MacNotesSource 解析 | AFK | 56 |
+| 102b | tags chunk 透传 + FTS5 索引 | AFK | 102a |
+| 103 | 代码围栏 `#` 误识别修复 | AFK | 63 |
+| 104 | embed_query 指令前缀 | AFK | 7 |
+| 105 | Unicode NFC 规范化 | AFK | 56 |
+
+### 方向 2：检索优化
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 106a1 | query_rewrite.j2 模板 | AFK | 方向 1 全部 |
+| 106a2 | QueryRewriter 类实现 | AFK | 106a1 |
+| 106a3 | QueryRewriter 单元测试 | AFK | 106a2 |
+| 106b | Retriever 集成 QueryRewriter | AFK | 106a2, 15 |
+| 107 | 候选池 k×2 扩大 | AFK | 方向 1 全部, 15 |
+| 108 | RRF 可配置权重 | AFK | 方向 1 全部, 15 |
+
+### 验证
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 109 | 全链路验证 | AFK | 101-108 全部 |
+
+---
+
 ## 统计
 
 | 类型 | 数量 |
 |------|:--:|
-| AFK | 44 |
+| AFK | 57 |
 | HITL | 1（#14 LLMGatewayProvider） |
-| 总计 | 45 |
+| 总计 | 58 |
 
 ---
 
@@ -194,33 +226,46 @@
 | 45 | docker-compose.yml + .env 模板 + .dockerignore | ✅ | - | `11b1f83` |
 | — | 构建修复: requirements.txt 精简 + curl + log 路径修正 + views.py 延迟导入 | ✅ | - | `(待提交)` |
 | — | 日志分级拆分: log_filter.py + settings.py 4 文件 | ✅ | - | `(待提交)` |
-| 46 | config/ingest.yaml — task_pool_size + settings.py — ZRAG_INGEST_EXECUTOR | ✅ | - | - |
-| 47 | SQLiteStore — init_db() 新增 ingest_tasks 建表 | ✅ | - | - |
-| 48 | TaskStatus 枚举 + IngestTask dataclass | ✅ | - | - |
-| 49 | TaskManager 模块级单例 | ✅ | - | - |
-| 50 | IngestionPipeline — run() 新增 should_cancel/on_document_done，移除 on_progress/ProgressEvent | ✅ | - | - |
-| 51 | MacNotesSource — 文件桥接模式，移除 AppleScript | ✅ | - | - |
-| 52 | DocumentViewSet.ingest() — 改为异步返回 202 + task_id | ✅ | - | - |
-| 53 | IngestTaskViewSet — status + cancel 端点 | ✅ | - | - |
-| 54 | zrag/api/urls.py — 新增 task/sources/available 路由 | ✅ | - | - |
-| 55 | schema_serializers.py — 新增 task 相关 Serializer | ✅ | - | - |
-| 56 | zrag/export_notes.py — 宿主机导出脚本 | ✅ | - | - |
-| 57 | frontend/src/api/endpoints.js — 新增端点函数 | ✅ | - | - |
-| 58 | frontend/src/composables/useIngest.js — 新建 composable | ✅ | - | - |
-| 59 | frontend/src/views/SourcesView.vue — 异步交互改造 | ✅ | - | - |
-| 60 | 抽象类父类型检查（4 处） | ✅ | - | - |
-| 61 | docs/design.md — 同步 manifest.json、IngestTaskViewSet 等 | ✅ | - | - |
-| 62 | `_html_to_markdown()` 五阶段转换增强 | ⬜ | - | - |
-| 63 | 新增 `HeadingChunker` 类 | ⬜ | - | - |
-| 64 | registry 中 mac_notes 改用 HeadingChunker | ⬜ | - | - |
-| 65 | 安装 jieba + requirements.txt | ⬜ | - | - |
-| 66 | sqlite_store 新增 `_tokenize_text()` | ⬜ | - | - |
-| 67 | FTS5 写入路径集成 jieba 分词 | ⬜ | - | - |
-| 68 | FTS5 查询路径集成 jieba 分词 | ⬜ | - | - |
-| 69 | `SearchResult` 新增 `chunk_index` 字段 | ⬜ | - | - |
-| 70 | `_build_results()` 传递 `chunk_index` | ⬜ | - | - |
-| 71 | `build_rag_prompt()` 同源 chunks 合并 | ⬜ | - | - |
-| 72 | 清空数据库 + 端到端验证 | ⬜ | - | - |
+| 46 | config/ingest.yaml — task_pool_size + settings.py — ZRAG_INGEST_EXECUTOR | ✅ | - | `(待提交)` |
+| 47 | SQLiteStore — init_db() 新增 ingest_tasks 建表 | ✅ | - | `(待提交)` |
+| 48 | TaskStatus 枚举 + IngestTask dataclass | ✅ | - | `(待提交)` |
+| 49 | TaskManager 模块级单例 | ✅ | - | `(待提交)` |
+| 50 | IngestionPipeline — run() 新增 should_cancel/on_document_done | ✅ | - | `(待提交)` |
+| 51 | MacNotesSource — 文件桥接模式 | ✅ | - | `(待提交)` |
+| 52 | DocumentViewSet.ingest() — 异步返回 202 + task_id | ✅ | - | `(待提交)` |
+| 53 | IngestTaskViewSet — status + cancel 端点 | ✅ | - | `(待提交)` |
+| 54 | zrag/api/urls.py — task/sources/available 路由 | ✅ | - | `(待提交)` |
+| 55 | schema_serializers.py — task 相关 Serializer | ✅ | - | `(待提交)` |
+| 56 | export_notes.py — 宿主机导出脚本（根目录） | ✅ | - | `(待提交)` |
+| 57 | frontend/src/api/endpoints.js — 新增端点函数 | ✅ | - | `(待提交)` |
+| 58 | frontend/src/composables/useIngest.js — 新建 composable | ✅ | - | `(待提交)` |
+| 59 | frontend/src/views/SourcesView.vue — 异步交互改造 | ✅ | - | `(待提交)` |
+| 60 | 抽象类父类型检查（4 处） | ✅ | - | `(待提交)` |
+| 61 | docs/design.md — 同步文档（缺 IngestTaskViewSet） | ⚠️ | - | `(待提交)` |
+| 62 | `_html_to_markdown()` 五阶段转换增强 | ✅ | 46 | `167eab5` |
+| 63 | 新增 `HeadingChunker` 类 | ✅ | 15 | `167eab5` |
+| 64 | registry 中 mac_notes 改用 HeadingChunker | ✅ | (含在 63) | `167eab5` |
+| 65 | 安装 jieba + requirements.txt | ✅ | - | `167eab5` |
+| 66 | sqlite_store 新增 `_tokenize_text()` | ✅ | 5 | `167eab5` |
+| 67 | FTS5 写入路径集成 jieba 分词 | ✅ | 1 | `167eab5` |
+| 68 | FTS5 查询路径集成 jieba 分词 | ✅ | 3 | `167eab5` |
+| 69 | `SearchResult` 新增 `chunk_index` 字段 | ✅ | 1 | `167eab5` |
+| 70 | `_build_results()` 传递 `chunk_index` | ✅ | (含在 69) | `167eab5` |
+| 71 | `build_rag_prompt()` 同源 chunks 合并 | ✅ | 2 | `167eab5` |
+| 72 | 清空数据库 + 端到端验证 | ✅ | - | `167eab5` |
+| 101 | 切分参数统一 max_size=1000 | ✅ | 24 | `(待提交)` |
+| 102a | tags 导出 + MacNotesSource 解析 | ✅ | 46 | `(待提交)` |
+| 102b | tags chunk 透传 + FTS5 索引 | ✅ | 20 | `(待提交)` |
+| 103 | 代码围栏 `#` 误识别修复 | ✅ | 22 | `(待提交)` |
+| 104 | embed_query 指令前缀 | ✅ | 5 | `(待提交)` |
+| 105 | Unicode NFC 规范化 | ✅ | 54 | `(待提交)` |
+| 106a1 | query_rewrite.j2 模板 | ✅ | - | `(待提交)` |
+| 106a2 | QueryRewriter 类实现 | ✅ | - | `(待提交)` |
+| 106a3 | QueryRewriter 单元测试 | ✅ | 9 | `(待提交)` |
+| 106b | Retriever 集成 QueryRewriter | ✅ | 6 | `(待提交)` |
+| 107 | 候选池 k×2 扩大 | ✅ | 6 | `(待提交)` |
+| 108 | RRF 可配置权重 | ✅ | 6 | `(待提交)` |
+| 109 | 全链路验证（构建部署+DB清空） | ✅ | - | `(待提交)` |
 
 - ✅ 已完成 · 🔄 进行中 · ⬜ 待开始 · ⚠ HITL 升级
 

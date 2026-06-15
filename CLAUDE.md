@@ -23,7 +23,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 
 ## subagent使用注意事项
-- 如果在使用subagent过程中建立了git worktree, 则```务必在subagent执行后清理相应的worktree```. 
+- 如果在使用subagent过程中建立了git worktree, 则```务必在worktree中的代码已经合并回指定分支后后清理相应的worktree```. 
 
 ## 关于session内容的留档
 当涉及到以下几个场景时, 应该提醒用户手动执行```/compact```命令手动压缩一下对话内容.
@@ -106,9 +106,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 需求/问题解决流程
 当讨论一个新需求或问题的实现时, 请遵循以下流程开展相关工作:
 1. 首先使用grill-me skill来与用户一起仔细探讨和深挖需求的细节点, 以及完成相应的设计工作.
-2. 当与用户讨论完后, 请使用to-prd skill来创建prd.
-3. 当用户确认完prd的内容后, 请使用to-issues skill来对需求进行任务切分. **注意: 任务切分后务必要询问用户“任务切分粒度”是否合适.**
-4. 当用户确认完任务列表后, 请使用to-tdd skill来开始真正的实现工作. 在此过程中,提醒用户切换到auto mode以便于使用后台subagent来最大可能的并行完成任务.
+2. 当grill-me skill执行完后, 请使用to-prd skill来创建prd.
+3. 当to-prd skill执行完后, 请使用to-issues skill来对需求进行任务切分. **注意: 任务切分后务必要询问用户“任务切分粒度”是否合适.**
+4. 当to-issues skill执行完并且用户确认完任务列表后, 请使用to-tdd skill来开始真正的实现工作. 在此过程中,提醒用户切换到auto mode以便于使用后台subagent来最大可能的并行完成任务.
 
 ## 日志收集
 - 如果需要查看已部署的后端项目日志, 请直接去logs/pro目录中查看即可, 无需进入到容器中查看.

@@ -8,8 +8,9 @@ from zrag.ingest.chunking.heading import HeadingChunker
 # 默认注册表: source_type → ChunkingStrategy
 CHUNKER_REGISTRY = {
     "mac_notes": CompositeChunker(
-        HeadingChunker(levels=[1, 2, 3], max_size=1024, min_size=200, overlap=100),
-        RecursiveCharacterChunker(max_size=1024, overlap=100)
+        HeadingChunker(levels=[1, 2, 3], max_size=1000, min_size=200, overlap=100),
+        RecursiveCharacterChunker(max_size=1000, overlap=100),
+        max_size=1000,
     ),
     "default": RecursiveCharacterChunker(),
 }

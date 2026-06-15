@@ -20,6 +20,7 @@ import logging
 import re
 import subprocess
 import sys
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -462,6 +463,27 @@ def compute_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def _normalize_text(text: str) -> str:
+    """对文本执行 Unicode NFC 规范化
+
+    macOS 文件系统倾向使用 NFD 编码，执行 NFC 规范化可以确保：
+    - content_hash 一致（同一文档每次导出 hash 相同）
+    - FTS5 检索匹配（相同字符不同编码形式可以匹配）
+    - Embedding 向量一致（相同字符不因编码不同而产生不同向量）
+
+    规范化的时机在文本写入 JSON 之前，确保存入磁盘的是 NFC 编码。
+    对空字符串和 None 值有防御性处理。
+
+    @param text: 原始文本
+    @type  text: str
+    @return: NFC 规范化后的文本
+    @rtype:  str
+    """
+    if text is None:
+        return ""
+    return unicodedata.normalize('NFC', text)
+
+
 # ---- 导出流程 ----
 
 def _write_note_json(
@@ -616,7 +638,7 @@ def _do_export(args):
         note_id = meta.get("id", "")
         note_folder = meta.get("folder", "")
 
-        markdown = exporter._html_to_markdown(html_content)
+        markdown = _normalize_text(exporter._html_to_markdown(html_content))
         note_hash = compute_hash(markdown)
 
         if note_id and note_id in processed and processed[note_id] == note_hash:
@@ -634,8 +656,9 @@ def _do_export(args):
             "content": markdown,
             "content_hash": note_hash,
             "metadata": {
-                "title": note_name,
-                "folder": note_folder,
+                "title": _normalize_text(note_name),
+                "folder": _normalize_text(note_folder),
+                "tags": [_normalize_text(t.strip()) for t in meta.get("tags", "").split(",") if t.strip()],
             },
         }
 

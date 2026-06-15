@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -20,7 +21,7 @@ import pytest
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from export_notes import NotesExporter, compute_hash, load_manifest
+from export_notes import NotesExporter, _normalize_text, compute_hash, load_manifest
 
 
 # ------------------------------------------------------------------
@@ -322,6 +323,65 @@ class TestMain:
         args = parser.parse_args(["task-1", "--tag", "技术笔记"])
         assert args.task_id == "task-1"
         assert args.tag == "技术笔记"
+
+
+# ------------------------------------------------------------------
+# 6. NFC 规范化
+# ------------------------------------------------------------------
+
+class TestNfcNormalization:
+    """Unicode NFC 规范化测试"""
+
+    def test_nfc_normalization_converts_nfd_to_nfc(self):
+        """NFD 编码的文本经规范化后变为 NFC 编码"""
+        # NFD 编码的 é (U+0065 拉丁小写字母 e + U+0301 组合重音)
+        e_acute_nfd = "é"  # NFD 形式
+        # NFC 编码的 é (U+00E9 拉丁小写字母 e 带重音)
+        e_acute_nfc = "é"   # NFC 形式
+
+        result = _normalize_text(e_acute_nfd)
+        assert result == e_acute_nfc
+        assert len(result) == 1  # NFC 为单个字符
+        assert len(e_acute_nfd) == 2  # NFD 为两个字符
+
+    def test_nfc_normalization_keeps_nfc_unchanged(self):
+        """已经是 NFC 编码的文本保持不变"""
+        nfc_text = "café"  # café 使用 NFC é
+        result = _normalize_text(nfc_text)
+        assert result == nfc_text
+
+    def test_nfc_normalization_handles_empty_string(self):
+        """空字符串经规范化后仍为空字符串"""
+        assert _normalize_text("") == ""
+
+    def test_nfc_normalization_handles_none(self):
+        """None 值经规范化后返回空字符串"""
+        assert _normalize_text(None) == ""
+
+    def test_nfc_normalization_mixed_text(self):
+        """混合 NFD 与 ASCII 的文本正确规范化"""
+        # 从 NFC 文本通过程序生成 NFD 版本，确保正确性
+        resume_nfc = "résumé"
+        resume_nfd = unicodedata.normalize('NFD', resume_nfc)
+        # 验证 NFD 版本确实比 NFC 长（é 由 1->2 字符）
+        assert len(resume_nfd) > len(resume_nfc)
+        result = _normalize_text(resume_nfd)
+        assert result == resume_nfc
+
+    def test_nfc_normalization_chinese_text(self):
+        """中文字符不受 NFC 规范化影响"""
+        chinese = "你好世界"
+        assert _normalize_text(chinese) == chinese
+
+    def test_nfc_normalization_japanese_text(self):
+        """日文字符不受 NFC 规范化影响"""
+        japanese = "こんにちは"
+        assert _normalize_text(japanese) == japanese
+
+    def test_nfc_normalization_ascii_text(self):
+        """纯 ASCII 文本不受 NFC 规范化影响"""
+        ascii_text = "Hello, World! 123"
+        assert _normalize_text(ascii_text) == ascii_text
 
 
 # ------------------------------------------------------------------

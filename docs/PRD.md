@@ -21,6 +21,8 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 - **RAG 问答**：检索结果 → Prompt 构建 → LiteLLM Gateway → LLM 生成回答（附来源标注）
 - **会话管理**：多轮对话持久化，支持切换、继续和删除历史对话
 - **Web UI**：Apple 风格聊天界面，深色/浅色模式切换，Markdown 渲染，代码高亮
+- **数据质量优化**：统一 chunk 大小为 1000 字符（适配 BGE-small 512 token 限制）、标签元数据透传 FTS5 索引、代码围栏标题误识别修复、Unicode NFC 规范化
+- **智能查询改写**：LLM 将口语化查询改写为结构化搜索表达（关键词 + 精炼查询），分别流入关键词和语义两条检索路径
 
 ## 用户故事
 
@@ -49,6 +51,10 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 23. 作为普通用户，我希望选择按笔记标签过滤导出范围，以便只导入特定主题的笔记
 24. 作为技术用户，我希望检索系统能理解中文查询的关键词匹配，以便用中文提问时获得准确的检索结果
 25. 作为知识工作者，我希望同一篇文档的相关段落被合并展示，以便在 AI 回答中获得更连贯的上下文
+26. 作为知识工作者，我希望系统能理解我口语化的提问并将其优化为更精准的搜索表达，以便获得更相关的检索结果
+27. 作为笔记用户，我希望笔记的标签信息能被检索系统利用，以便按标签主题过滤和匹配相关内容
+28. 作为注重准确性的用户，我希望代码块中的注释符号不会被误判为文档标题，以便代码内容保持完整不被错误切分
+29. 作为知识工作者，我希望向量检索和关键词检索的融合权重可以按场景调整，以便在语义理解和精确匹配之间做出平衡
 
 ## 实现决策
 
@@ -68,11 +74,12 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 - 数据一致性策略：先写 SQLite（ACID 保证），后写 ChromaDB（失败可补偿重试）。processed_docs 标记"双库均已就绪"
 - FTS5 提供内置 BM25 评分——无需手写 BM25，零额外依赖
 - FTS5 中文分词：写入和查询时对 content 列统一调用 jieba 分词，中英混合文本仅对中文部分做分词，英文/代码部分保留原样
+- FTS5 索引内容除 chunk content 外，也包含 metadata 中的 tags 字段，使标签关键词可被全文检索命中
 
 ### 文档摄入
 
 - DocumentSource 抽象基类，定义 fetch_batch() 和 source_type 接口——首个实现为 MacNotesSource
-- ChunkingStrategy 抽象基类，定义 chunk(document) → list[Chunk] 接口。首个实现为 ParagraphChunker（按段落切分），后续新增 HeadingChunker：按 Markdown 标题层级（H1-H3）作为语义切分边界，无标题时回退到 RecursiveCharacterChunker，超长段二次切分时子 chunk 继承父标题路径。mac_notes 来源使用 CompositeChunker(HeadingChunker, RecursiveCharacterChunker)，参数为 levels=[1,2,3], max_size=1024, min_size=200, overlap=100
+- ChunkingStrategy 抽象基类，定义 chunk(document) → list[Chunk] 接口。首个实现为 ParagraphChunker（按段落切分），后续新增 HeadingChunker：按 Markdown 标题层级（H1-H3）作为语义切分边界，无标题时回退到 RecursiveCharacterChunker，超长段二次切分时子 chunk 继承父标题路径。mac_notes 来源使用 CompositeChunker(HeadingChunker, RecursiveCharacterChunker)，参数为 levels=[1,2,3], max_size=1000, min_size=200, overlap=100。所有切分器（HeadingChunker、CompositeChunker、RecursiveCharacterChunker）的 max_size 统一为 1000 字符。依据：Embedding 模型 BGE-small-zh-v1.5 的 max sequence length 为 512 tokens，中文约 1 token ≈ 1.5-2 字符，512 tokens ≈ 800-1000 字符。CompositeChunker 默认 max_size=512 保持不变（向后兼容），仅在 SOURCE_REGISTRY 中显式传 max_size=1000
 - IngestionPipeline 编排全流程：Source → Chunk → Embed → 写 SQLite → 写 ChromaDB → 更新 processed_docs
 - 每篇文档独立事务（非批量事务）
 - 默认增量导入（content_hash 对比），全量导入通过 {"full": true} 触发
@@ -87,16 +94,32 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 - `export_notes.py` 中 `NotesExporter._html_to_markdown()` 采用五阶段流水线：预处理（移除 base64 图片 + 统一换行）→ 块级元素（pre/code→```, h1-h6→#, ul/ol/li→列表, blockquote→>, table→表格, hr→---, p/br→换行）→ 内联元素（b/strong→**, i/em→*, del/s→~~, code→`, a→[](), img→![]()）→ 清理（移除剩余标签 + HTML 实体解码）→ 整理（压缩空白 + base64 安全网）
 - 作为通用转换器实现，不依赖 Apple Notes 特定 HTML 结构，覆盖 12 种常见 HTML 标签
 
+### Unicode 规范化
+
+- `export_notes.py` 导出流程中对所有文本输出（title、folder、tags、content）执行 NFC 规范化
+- macOS 文件系统倾向使用 NFD 编码，若不做规范化会导致：content_hash 不一致（同一文档重复摄入）、FTS5 检索不匹配（相同字符不同编码）、Embedding 向量漂移（不同 Unicode 编码产生不同向量）
+
+### 标签元数据透传
+
+- `export_notes.py` 提取的 tags 写入 JSON metadata 字段 → MacNotesSource 解析后存入 RawDocument.metadata["tags"] → ChunkingStrategy 透传到 chunk metadata → SQLite chunks 表 content 尾部追加 tags（参与 FTS5 索引）
+
+### 代码围栏标题误识别修复
+
+- HeadingChunker 的标题检测正则可能在 re.MULTILINE 模式下误匹配代码围栏（```...```）内的 `#` 注释行
+- 解决方案：在标题检测前新增 `_remove_code_fences()` 方法，扫描并暂时移除代码围栏区域，标题检测在剥离代码干扰后的文本上执行，代码围栏内容仍完整保留在 chunk 中
+
 ### Embedding
 
 - 模型：BAAI/bge-small-zh-v1.5（512 维，sentence-transformers 加载）
 - EmbeddingModel 抽象基类，定义 embed(texts)、embed_query(query) 和 dimension 接口
 - 模型在宿主机预下载，容器内通过只读 volume 挂载，启动时零等待
+- `embed_query()` 方法添加 BGE 推荐的中文查询指令前缀 `"为这个句子生成表示以用于检索相关文章："`。`embed()` 方法（文档向量化）不加前缀，保持原样。BGE v1.5 对无指令容忍度较高（下降约 1-5%），但 s2p（短查询匹配长文档）场景下仍建议添加指令前缀
 
 ### 检索层
 
-- 混合检索：ChromaDB similarity_search(k=10) + SQLite FTS5 BM25 with jieba 分词(k=10) → RRF 融合(k=60)
-- RRF 公式：score(d) = 1/(60 + rank_vector) + 1/(60 + rank_bm25)
+- **查询改写（Query Rewriting）**：`hybrid_search()` 在 embedding 和 FTS5 查询前，先通过 QueryRewriter 调用 LLM 将用户原始查询改写为结构化 JSON `{keywords, refined_query}`。`keywords` 为提炼后的关键词列表（空格分隔），直接流入 FTS5 全文检索路径（走 jieba 分词索引）；`refined_query` 为精炼后的自然语言表达，流入向量语义检索路径。改写始终执行，无跳过条件。QueryRewriter 使用 Jinja2 模板（query_rewrite.j2）构建 System Prompt
+- 混合检索：ChromaDB similarity_search(k=k×2，默认 20) + SQLite FTS5 BM25 with jieba 分词(k=k×2，默认 20) → RRF 融合。扩大候选池后 RRF 有更充分的材料进行排序融合，最终截取 top-k（默认 10）返回，避免遗漏"只有一条路径认可"的优质结果
+- RRF 公式：`score(d) = w_vector/(k + rank_vector) + w_keyword/(k + rank_keyword)`。权重从 config/retrieval.yaml 读取，默认等权（1.0/1.0），可按语料特征和场景调整偏向
 - 结果按 RRF 分数排序，通过排序融合自然去重
 - SearchResult 数据类包含 chunk_index 字段，供同源合并时排序
 - build_rag_prompt() 中按 doc_title 合并同源 chunks，按 chunk_index 排序后拼接为单个 [来源: X] 块
@@ -174,6 +197,15 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 ### 配置管理
 
 - config/ 目录下按模块分文件：llm.yaml、embedding.yaml、ingest.yaml、api.yaml、storage.yaml、retrieval.yaml
+  - retrieval.yaml 新增检索相关配置项：
+    ```yaml
+    retrieval:
+      top_k: 10
+      rrf_k: 60
+      rrf_weights:
+        vector: 1.0
+        keyword: 1.0
+    ```
 - 动态合并加载器：排序 glob -> 合并嵌套键 -> 解析环境变量 ${VAR} -> 环境变量覆盖
 - 配置加载三阶段流程：
   - 阶段 1：YAML 文件扫描合并
@@ -239,7 +271,8 @@ CREATE TABLE ingest_tasks (id TEXT PK, task_type TEXT NOT NULL, status TEXT NOT 
 | LLM Provider | chat() 带 mock gateway、错误处理（回调 vs 抛异常）、超时行为 |
 | HTML→Markdown 转换 | 12 种标签转换正确性、base64 图片移除、实体解码、空白整理 |
 | FTS5 jieba 分词 | 中文分词正确性、中英混合文本处理、写入/查询一致性 |
-| 检索 Retriever | hybrid_search 去重结果、RRF 评分正确性、空结果处理 |
+| 检索 Retriever | hybrid_search 去重结果、RRF 评分正确性、空结果处理、查询改写分流正确性、k×2 候选池截断、RRF 权重计算 |
+| 检索 QueryRewriter | LLM 改写 JSON 解析、异常降级处理 |
 | 检索 PromptBuilder | build() 输出结构、上下文截断、来源格式化 |
 | API 全部端点 | 请求/响应校验、认证检查、速率限制、错误响应、404 处理 |
 | 会话 API | create/list/get/delete 流程、不存在对话 404、DELETE 幂等、LLM 失败回滚 |
@@ -274,3 +307,4 @@ CREATE TABLE ingest_tasks (id TEXT PK, task_type TEXT NOT NULL, status TEXT NOT 
 - Prompt 模板引擎：Jinja2（zrag/prompts/chat_system.j2），支持条件渲染和格式化
 - 混合检索准确度优化设计讨论记录于 docs/QA/hybrid-search-accuracy.md
 - 中文分词方案采用 jieba（纯 Python 实现，轻量无外部服务依赖）
+- RAG 回答质量优化设计讨论记录于 docs/QA/rag-quality-optimization.md（Q1-Q14），设计细节已写入 docs/design.md 相应章节

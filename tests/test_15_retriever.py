@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from zrag.embed.base import EmbeddingModel
 from zrag.models.retrieval import SearchResult
 from zrag.retrieval.retriever import Retriever
 
@@ -28,7 +29,7 @@ class TestRetriever:
         """
         sqlite_store = MagicMock()
         chroma_store = MagicMock()
-        embedder = MagicMock()
+        embedder = MagicMock(spec=EmbeddingModel)
         embedder.embed_query.return_value = [0.1, 0.2, 0.3]
         return sqlite_store, chroma_store, embedder
 
@@ -102,7 +103,7 @@ class TestRetriever:
         # 验证 embedder 被调用
         embedder.embed_query.assert_called_once_with('test query')
         chroma_store.similarity_search.assert_called_once()
-        sqlite_store.search_fts5.assert_called_once_with('test query', 3)
+        sqlite_store.search_fts5.assert_called_once_with('test query', 6)
 
     def test_rrf_deduplicates(self):
         """RRF 融合去重: 同一 chunk_id 同时出现在两种检索结果中时, 只返回一条结果"""
@@ -162,8 +163,13 @@ class TestRetriever:
              'source_id': 'S4', 'source_type': 'txt', 'bm25_score': -3.0},
         ]
 
-        # 对于 chunk_3（只在向量检索中）, 需要模拟 fetch_one
-        sqlite_store.fetch_one.return_value = None  # 模拟 SQLite 中也查不到
+        # 对于 chunk_3（只在向量检索中）, 模拟 SQLite 中有对应记录
+        sqlite_store.fetch_one.return_value = {
+            'content': '',
+            'doc_title': 'Doc3',
+            'source_id': 'src_3',
+            'source_type': 'txt',
+        }
 
         retriever = self._make_retriever(sqlite_store, chroma_store, embedder)
         results = retriever.hybrid_search('test', k=10)
