@@ -69,7 +69,8 @@ class QueryRewriter:
             return self._parse_response(response, query)
         except Exception as e:
             logger.warning(
-                "Query rewriting failed: %s, falling back to original query", e
+                "Query rewriting failed, falling back to original query",
+                extra={"error": str(e)},
             )
             return {"keywords": query, "refined_query": query}
 
@@ -127,8 +128,8 @@ class QueryRewriter:
             keywords = result.get("keywords", query)
             refined_query = result.get("refined_query", query)
             logger.info(
-                "QueryRewriter result: query=%s, keywords=%s, refined_query=%s",
-                query, keywords, refined_query,
+                "QueryRewriter result",
+                extra={"query": query, "keywords": keywords, "refined_query": refined_query},
             )
             return {
                 "keywords": keywords,
@@ -136,6 +137,7 @@ class QueryRewriter:
             }
         except json.JSONDecodeError:
             logger.warning(
-                "Failed to parse JSON from LLM response: %s", text[:200]
+                "Failed to parse JSON from LLM response",
+                extra={"response_preview": text[:200]},
             )
             return {"keywords": query, "refined_query": query}

@@ -73,8 +73,8 @@ class CompressService:
         @type  assistant_reply:  str
         """
         logger.info(
-            "压缩任务提交: conversation_id=%s old_summary_len=%d",
-            conversation_id, len(old_summary),
+            "压缩任务提交",
+            extra={"conversation_id": conversation_id, "old_summary_len": len(old_summary)},
         )
         self._executor.submit(
             self._run,
@@ -108,13 +108,15 @@ class CompressService:
             )
         except Exception:
             logger.exception(
-                "压缩 LLM 调用失败 conversation_id=%s", conversation_id
+                "压缩 LLM 调用失败",
+                extra={"conversation_id": conversation_id},
             )
             return
 
         if not new_summary:
             logger.warning(
-                "压缩结果为空 conversation_id=%s", conversation_id,
+                "压缩结果为空",
+                extra={"conversation_id": conversation_id},
             )
             return
 
@@ -125,11 +127,11 @@ class CompressService:
                 (new_summary, conversation_id),
             )
             logger.info(
-                "摘要已写入 conversation_id=%s summary_len=%d",
-                conversation_id,
-                len(new_summary),
+                "摘要已写入",
+                extra={"conversation_id": conversation_id, "summary_len": len(new_summary)},
             )
         except Exception:
             logger.exception(
-                "摘要写入 DB 失败 conversation_id=%s", conversation_id
+                "摘要写入 DB 失败",
+                extra={"conversation_id": conversation_id},
             )

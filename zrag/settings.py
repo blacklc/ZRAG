@@ -110,7 +110,7 @@ LOGGING = {
     'disable_existing_loggers': False,
     'formatters': {
         'verbose': {
-            'format': '%(asctime)s [%(levelname)s] %(thread)d %(funcName)s:%(lineno)d %(message)s',
+            '()': 'zrag.log_formatter.JsonFormatter',
         },
     },
     'filters': {

@@ -42,4 +42,4 @@ class ZragConfig(AppConfig):
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
-            logger.warning("Embedding 模型预加载失败, 将在首次使用时延迟加载: %s", str(e))
+            logger.warning("Embedding 模型预加载失败, 将在首次使用时延迟加载", extra={"error": str(e)})

@@ -39,7 +39,7 @@ def build_rag_prompt(query: str, results: list) -> list[dict]:
     sorted_results = sorted(results, key=lambda r: r.chunk_index or 0)
     for r in sorted_results:
         if not r.doc_title:
-            logger.warning("Empty doc_title in result chunk_id=%s", getattr(r, 'chunk_id', 'unknown'))
+            logger.warning("Empty doc_title in result", extra={"chunk_id": getattr(r, 'chunk_id', 'unknown')})
         merged.setdefault(r.doc_title, []).append(r.content)
 
     materials = [
@@ -49,7 +49,7 @@ def build_rag_prompt(query: str, results: list) -> list[dict]:
 
     for m in materials:
         if not m["content"].strip():
-            logger.warning("Empty content after merge for doc_title=%s", m["doc_title"])
+            logger.warning("Empty content after merge", extra={"doc_title": m["doc_title"]})
 
     system_msg = template.render(reference_materials=materials)
     return [

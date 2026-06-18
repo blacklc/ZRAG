@@ -9,8 +9,11 @@
 const API_KEY = import.meta.env.VITE_API_KEY || ''
 /** API 基础路径，生产环境通过 nginx 代理 */
 const BASE_PATH = import.meta.env.VITE_API_BASE || '/zrag'
-/** fetch 默认超时时间 (毫秒), 超时后抛出 TIMEOUT 错误 */
-const DEFAULT_TIMEOUT_MS = 60000
+/**
+ * fetch 默认超时时间 (毫秒), 超时后抛出 TIMEOUT 错误
+ * 比后端 config/llm.yaml 的 timeout: 200s 多 10 秒缓冲
+ */
+const DEFAULT_TIMEOUT_MS = parseInt(import.meta.env.VITE_API_TIMEOUT, 10) || 210000
 
 /**
  * API 调用错误

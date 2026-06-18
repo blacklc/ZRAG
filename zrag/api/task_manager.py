@@ -105,8 +105,7 @@ class TaskManager:
         self._upsert_task_db(task)
         self._tasks[task.id] = task
         self._events[task.id] = threading.Event()
-        logger.info("[task=%s] 任务已创建 task_type=%s status=%s",
-                    task.id, task_type, TaskStatus.PENDING.value)
+        logger.info("任务已创建", extra={"task_id": task.id, "task_type": task_type, "status": TaskStatus.PENDING.value})
         return task
 
     def submit(self, task: IngestTask, pipeline, source, full: bool) -> None:
@@ -123,8 +122,7 @@ class TaskManager:
         """
         task.status = TaskStatus.WAITING_EXPORT
         self._executor.submit(self._run, task, pipeline, source, full)
-        logger.info("[task=%s] 任务已提交 task_type=%s full=%s",
-                    task.id, task.task_type, full)
+        logger.info("任务已提交", extra={"task_id": task.id, "task_type": task.task_type, "full": full})
 
     def cancel_task(self, task_id: str) -> None:
         """取消指定任务
@@ -138,9 +136,9 @@ class TaskManager:
         if task:
             task.status = TaskStatus.CANCELLED
             self._events[task_id].set()
-            logger.info("[task=%s] 任务已取消", task_id)
+            logger.info("任务已取消", extra={"task_id": task_id})
         else:
-            logger.warning("[task=%s] 取消失败: 任务不存在", task_id)
+            logger.warning("取消失败: 任务不存在", extra={"task_id": task_id})
 
     def get_task(self, task_id: str) -> IngestTask | None:
         """根据任务 ID 查询任务
@@ -208,8 +206,7 @@ class TaskManager:
         with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
 
-        logger.info("[task=%s] manifest.json 已写入, processed_docs=%d",
-                    task.id, len(processed_docs))
+        logger.info("manifest.json 已写入", extra={"task_id": task.id, "processed_docs": len(processed_docs)})
 
     def _upsert_task_db(self, task: IngestTask) -> None:
         """将任务写入或更新数据库
@@ -230,7 +227,7 @@ class TaskManager:
                  task.created_at, task.updated_at),
             )
         except Exception:
-            logger.exception("[task=%s] 更新任务数据库记录失败", task.id)
+            logger.exception("更新任务数据库记录失败", extra={"task_id": task.id})
 
     def _run(self, task: IngestTask, pipeline, source, full: bool) -> None:
         """在线程池中执行摄入流程
@@ -244,8 +241,7 @@ class TaskManager:
         """
         try:
             task.status = TaskStatus.PROCESSING
-            logger.info("[task=%s] 摄入处理开始 task_type=%s full=%s",
-                        task.id, task.task_type, full)
+            logger.info("摄入处理开始", extra={"task_id": task.id, "task_type": task.task_type, "full": full})
             pipeline.run(
                 source=source,
                 full=full,
@@ -254,15 +250,14 @@ class TaskManager:
                 on_total_known=lambda n: self._on_total_known(task, n),
             )
             task.status = TaskStatus.DONE
-            logger.info("[task=%s] 摄入处理完成 total=%d processed=%d",
-                        task.id, task.total, task.processed)
+            logger.info("摄入处理完成", extra={"task_id": task.id, "total": task.total, "processed": task.processed})
         except Exception:
             if self._events[task.id].is_set():
                 task.status = TaskStatus.CANCELLED
-                logger.warning("[task=%s] 摄入已取消", task.id)
+                logger.warning("摄入已取消", extra={"task_id": task.id})
             else:
                 task.status = TaskStatus.FAILED
-                logger.exception("[task=%s] 摄入处理失败", task.id)
+                logger.exception("摄入处理失败", extra={"task_id": task.id})
         finally:
             task.updated_at = datetime.now(timezone.utc).isoformat()
             self._upsert_task_db(task)
@@ -316,6 +311,6 @@ class TaskManager:
         try:
             if os.path.exists(export_dir):
                 shutil.rmtree(export_dir)
-                logger.info("导出目录已清理: %s", export_dir)
+                logger.info("导出目录已清理", extra={"export_dir": export_dir})
         except Exception:
-            logger.exception("清理导出目录失败: %s", export_dir)
+            logger.exception("清理导出目录失败", extra={"export_dir": export_dir})

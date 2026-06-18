@@ -226,7 +226,7 @@ class SQLiteStore:
         except Exception:
             import logging
             logger = logging.getLogger(__name__)
-            logger.warning("FTS5 检索失败: query=%s safe_query=%s tokenized=%s", query, safe_query, tokenized_query)
+            logger.warning("FTS5 检索失败", extra={"query": query, "safe_query": safe_query, "tokenized": tokenized_query})
             return []
 
     @contextmanager
@@ -360,13 +360,13 @@ class SQLiteStore:
             "ALTER TABLE conversations ADD COLUMN summary TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE conversations ADD COLUMN summary_updated_at TEXT NOT NULL DEFAULT ''",
         ]
-        logger.info("数据库迁移开始, 待执行迁移数量: %d", len(migrations))
+        logger.info("数据库迁移开始", extra={"migration_count": len(migrations)})
         for sql in migrations:
             try:
                 conn.execute(sql)
-                logger.info("迁移执行成功: %s", sql)
+                logger.info("迁移执行成功", extra={"sql": sql})
             except sqlite3.OperationalError:
-                logger.debug("列已存在跳过: %s", sql)  # Column already exists, skip
+                logger.debug("列已存在跳过", extra={"sql": sql})  # Column already exists, skip
         logger.info("数据库迁移完成")
 
     def close(self) -> None:

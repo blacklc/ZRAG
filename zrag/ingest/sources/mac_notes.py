@@ -71,8 +71,7 @@ class MacNotesSource(DocumentSource):
         result_file = export_path / "result.json"
 
         # 阶段 1: 轮询等待 result.json（可被 should_cancel 中断）
-        logger.info("等待 result.json 就绪: %s (轮询间隔: %ds)",
-                    result_file, self._poll_interval)
+        logger.info("等待 result.json 就绪", extra={"result_file": str(result_file), "poll_interval": self._poll_interval})
         while not result_file.exists():
             if self.should_cancel and self.should_cancel():
                 raise RuntimeError("任务已被取消，轮询等待中断")
@@ -83,7 +82,7 @@ class MacNotesSource(DocumentSource):
             with open(result_file, encoding="utf-8") as f:
                 result = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
-            logger.exception("读取 result.json 失败: %s", result_file)
+            logger.exception("读取 result.json 失败", extra={"result_file": str(result_file)})
             raise ValueError(f"result.json 格式异常或读取失败: {e}") from e
 
         if result.get("status") != "ok":
@@ -92,8 +91,7 @@ class MacNotesSource(DocumentSource):
             )
 
         self._total = result.get("success", 0)
-        logger.info("导出完成: success=%d expected=%d",
-                    result.get("success", 0), result.get("expected", 0))
+        logger.info("导出完成", extra={"success": result.get("success", 0), "expected": result.get("expected", 0)})
 
         # 阶段 2: 逐篇读取笔记 JSON 文件
         json_files = sorted(export_path.glob("*.json"))
@@ -106,7 +104,7 @@ class MacNotesSource(DocumentSource):
                 with open(filepath, encoding="utf-8") as f:
                     note = json.load(f)
             except (json.JSONDecodeError, OSError) as e:
-                logger.warning("跳过损坏的笔记文件: %s — %s", filepath, e)
+                logger.warning("跳过损坏的笔记文件", extra={"filepath": str(filepath), "error": str(e)})
                 continue
 
             doc = RawDocument(

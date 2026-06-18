@@ -434,7 +434,10 @@ class TestNotesExporterLogging:
             assert result == {"id": "", "folder": "", "tags": ""}
             assert any(record.levelname == "ERROR" for record in caplog.records)
             assert "获取笔记元数据失败" in caplog.text
-            assert "test_note" in caplog.text
+            assert any(
+                getattr(record, "note_name", None) == "test_note"
+                for record in caplog.records
+            )
 
 
 def test_write_note_json_logs_oserror(caplog):

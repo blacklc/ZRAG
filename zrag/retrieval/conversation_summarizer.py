@@ -51,8 +51,8 @@ class ConversationSummarizer:
         @rtype:  str
         """
         logger.info(
-            "summarize entry: old_summary_len=%d query_len=%d reply_len=%d",
-            len(old_summary), len(user_query), len(assistant_reply),
+            "summarize entry",
+            extra={"old_summary_len": len(old_summary), "query_len": len(user_query), "reply_len": len(assistant_reply)},
         )
 
         truncated_reply = assistant_reply[:self._MAX_REPLY_CHARS]
@@ -67,8 +67,8 @@ class ConversationSummarizer:
             return ""
 
         logger.info(
-            "summarize success: new_summary_len=%d max_chars=%d",
-            len(cleaned), self._max_chars,
+            "summarize success",
+            extra={"new_summary_len": len(cleaned), "max_chars": self._max_chars},
         )
         return cleaned
 
@@ -113,7 +113,7 @@ class ConversationSummarizer:
                 return ""
             return response
         except Exception as e:
-            logger.warning("ConversationSummarizer LLM call failed: %s", e)
+            logger.warning("ConversationSummarizer LLM 调用失败", extra={"error": str(e)})
             return ""
 
     def _clean_summary(self, raw_text: str) -> str:

@@ -79,7 +79,7 @@ class DocumentViewSet(viewsets.ViewSet):
             source_type = next(iter(SOURCE_REGISTRY))
 
         req_id = _get_request_id(request)
-        logger.info("[req=%s] 开始文档摄入 source_type=%s full=%s", req_id, source_type, full)
+        logger.info("开始文档摄入", extra={"request_id": req_id, "source_type": source_type, "full": full})
 
         source_cls = SOURCE_REGISTRY.get(source_type)
         if source_cls is None:
@@ -111,8 +111,7 @@ class DocumentViewSet(viewsets.ViewSet):
             embedder=embedder,
             chunker=chunker,
         )
-        logger.info("[req=%s] Pipeline 已初始化 source_type=%s task_id=%s",
-                    req_id, source_type, task.id)
+        logger.info("Pipeline 已初始化", extra={"request_id": req_id, "source_type": source_type, "task_id": task.id})
 
         manager.submit(task, pipeline, source, full)
 
@@ -162,7 +161,7 @@ class DocumentViewSet(viewsets.ViewSet):
         ]
 
         req_id = _get_request_id(request)
-        logger.info("[req=%s] 来源列表已查询 count=%d", req_id, len(sources))
+        logger.info("来源列表已查询", extra={"request_id": req_id, "count": len(sources)})
         return APIResponse(
             data={"sources": sources},
             message="success",
@@ -190,7 +189,7 @@ class DocumentViewSet(viewsets.ViewSet):
         @return: 包含数据源类型列表的 APIResponse, http_status 200
         @rtype:  rest_framework.response.Response
         """
-        logger.info("[req=%s] 可用来源列表已查询", _get_request_id(request))
+        logger.info("可用来源列表已查询", extra={"request_id": _get_request_id(request)})
         return APIResponse(
             data={"sources": list(SOURCE_REGISTRY.keys())},
             request=request,
@@ -322,7 +321,7 @@ class ConversationViewSet(viewsets.ViewSet):
             FROM conversations c ORDER BY last_msg_at DESC
         """)
         req_id = _get_request_id(request)
-        logger.debug("[req=%s] 会话列表已查询 count=%d", req_id, len(rows))
+        logger.debug("会话列表已查询", extra={"request_id": req_id, "count": len(rows)})
         return APIResponse(data={"total": len(rows), "conversations": rows})
 
     @extend_schema(
@@ -358,7 +357,7 @@ class ConversationViewSet(viewsets.ViewSet):
         )
         req_id = _get_request_id(request)
         if conv is None:
-            logger.warning("[req=%s] 会话不存在 conversation_id=%s", req_id, conversation_id)
+            logger.warning("会话不存在", extra={"request_id": req_id, "conversation_id": conversation_id})
             return APIResponse(
                 data=None,
                 message="conversation not found",
@@ -369,7 +368,7 @@ class ConversationViewSet(viewsets.ViewSet):
             "FROM messages WHERE conversation_id = ? ORDER BY created_at",
             (conversation_id,),
         )
-        logger.info("[req=%s] 消息列表已查询 conversation_id=%s count=%d", req_id, conversation_id, len(rows))
+        logger.info("消息列表已查询", extra={"request_id": req_id, "conversation_id": conversation_id, "count": len(rows)})
         return APIResponse(data={"conversation_id": conversation_id, "messages": rows})
 
     @extend_schema(
@@ -400,7 +399,7 @@ class ConversationViewSet(viewsets.ViewSet):
             db.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
             db.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
         req_id = _get_request_id(request)
-        logger.info("[req=%s] 会话已删除 conversation_id=%s", req_id, conversation_id)
+        logger.info("会话已删除", extra={"request_id": req_id, "conversation_id": conversation_id})
         return APIResponse(data={"deleted": conversation_id})
 
     @extend_schema(
@@ -466,20 +465,19 @@ class ConversationViewSet(viewsets.ViewSet):
 
         retriever = self._get_retriever()
         results = retriever.hybrid_search(query, k=10)
-        logger.info("[req=%s] 检索完成 conversation_id=%s results_count=%d", req_id, conversation_id, len(results))
+        logger.info("检索完成", extra={"request_id": req_id, "conversation_id": conversation_id, "results_count": len(results)})
 
         messages = build_rag_prompt(query, results)
 
         llm = self._get_llm()
         logger.debug(
-            "[req=%s] create full_messages: roles=%s",
-            req_id,
-            [m["role"] for m in messages],
+            "构建完整消息列表",
+            extra={"request_id": req_id, "roles": [m["role"] for m in messages]},
         )
         reply = llm.chat(messages)
         if reply is None:
             raise LLMCallException("LLM returned no response")
-        logger.info("[req=%s] LLM 调用完成 conversation_id=%s reply_len=%d", req_id, conversation_id, len(reply))
+        logger.info("LLM 调用完成", extra={"request_id": req_id, "conversation_id": conversation_id, "reply_len": len(reply)})
 
         sources_json = json.dumps(
             [
@@ -507,7 +505,7 @@ class ConversationViewSet(viewsets.ViewSet):
             "VALUES (?, ?, ?, ?, ?)",
             (assistant_msg_id, conversation_id, "assistant", reply, sources_json),
         )
-        logger.info("[req=%s] 消息已保存 conversation_id=%s", req_id, conversation_id)
+        logger.info("消息已保存", extra={"request_id": req_id, "conversation_id": conversation_id})
 
         # 首轮对话摘要为空，old_summary=""
         from zrag.utils.compress import get_compress_service
@@ -517,7 +515,7 @@ class ConversationViewSet(viewsets.ViewSet):
             user_query=query,
             assistant_reply=reply,
         )
-        logger.info("[req=%s] 压缩任务已提交 conversation_id=%s", req_id, conversation_id)
+        logger.info("压缩任务已提交", extra={"request_id": req_id, "conversation_id": conversation_id})
 
         return APIResponse(
             data={
@@ -617,7 +615,7 @@ class ConversationViewSet(viewsets.ViewSet):
             (conversation_id, max_history),
         )
         history = list(reversed(history_rows))
-        logger.info("[req=%s] 历史消息已加载 conversation_id=%s history_count=%d", req_id, conversation_id, len(history))
+        logger.info("历史消息已加载", extra={"request_id": req_id, "conversation_id": conversation_id, "history_count": len(history)})
 
         retriever = self._get_retriever()
         # 读取对话摘要
@@ -627,13 +625,13 @@ class ConversationViewSet(viewsets.ViewSet):
         )
         summary = conv["summary"] if conv and conv.get("summary") else None
         if summary:
-            logger.info("[req=%s] 会话摘要已加载 conversation_id=%s summary_len=%d", req_id, conversation_id, len(summary))
+            logger.info("会话摘要已加载", extra={"request_id": req_id, "conversation_id": conversation_id, "summary_len": len(summary)})
         else:
-            logger.info("[req=%s] 会话摘要为空 conversation_id=%s", req_id, conversation_id)
+            logger.info("会话摘要为空", extra={"request_id": req_id, "conversation_id": conversation_id})
 
         # 检索（传入摘要）
         results = retriever.hybrid_search(query, k=10, summary=summary)
-        logger.info("[req=%s] 检索完成 conversation_id=%s results_count=%d", req_id, conversation_id, len(results))
+        logger.info("检索完成", extra={"request_id": req_id, "conversation_id": conversation_id, "results_count": len(results)})
 
         rag_messages = build_rag_prompt(query, results)
         system_msg = rag_messages[0]
@@ -654,14 +652,13 @@ class ConversationViewSet(viewsets.ViewSet):
 
         llm = self._get_llm()
         logger.debug(
-            "[req=%s] full_messages: roles=%s",
-            req_id,
-            [m["role"] for m in full_messages],
+            "构建完整消息列表",
+            extra={"request_id": req_id, "roles": [m["role"] for m in full_messages]},
         )
         reply = llm.chat(full_messages)
         if reply is None:
             raise LLMCallException("LLM returned no response")
-        logger.info("[req=%s] LLM 调用完成 conversation_id=%s reply_len=%d", req_id, conversation_id, len(reply))
+        logger.info("LLM 调用完成", extra={"request_id": req_id, "conversation_id": conversation_id, "reply_len": len(reply)})
 
         sources_json = json.dumps(
             [
@@ -689,7 +686,7 @@ class ConversationViewSet(viewsets.ViewSet):
             "VALUES (?, ?, ?, ?, ?)",
             (assistant_msg_id, conversation_id, "assistant", reply, sources_json),
         )
-        logger.info("[req=%s] 消息已保存 conversation_id=%s", req_id, conversation_id)
+        logger.info("消息已保存", extra={"request_id": req_id, "conversation_id": conversation_id})
 
         # 异步压缩（不等待）
         from zrag.utils.compress import get_compress_service
@@ -699,7 +696,7 @@ class ConversationViewSet(viewsets.ViewSet):
             user_query=query,
             assistant_reply=reply,
         )
-        logger.info("[req=%s] 压缩任务已提交 conversation_id=%s", req_id, conversation_id)
+        logger.info("压缩任务已提交", extra={"request_id": req_id, "conversation_id": conversation_id})
 
         return APIResponse(
             data={
@@ -803,5 +800,5 @@ class IngestTaskViewSet(viewsets.ViewSet):
                 http_status=404,
             )
         manager.cancel_task(task_id)
-        logger.info("[req=%s] 任务已取消 task_id=%s", _get_request_id(request), task_id)
+        logger.info("任务已取消", extra={"request_id": _get_request_id(request), "task_id": task_id})
         return APIResponse(data=manager.to_dict(task), request=request)

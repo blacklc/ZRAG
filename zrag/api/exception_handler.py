@@ -106,7 +106,7 @@ class DefaultErrorHandler(BaseAPIExceptionHandler):
         @rtype:  rest_framework.response.Response
         """
         _logger = logging.getLogger(__name__)
-        _logger.exception("未预期的异常: %s", exc)
+        _logger.exception("未预期的异常", extra={"exception": str(exc)})
         request = context.get("request")
         request_id = ""
         if request:

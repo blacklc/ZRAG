@@ -151,10 +151,61 @@ class BaseDecreasePolicy(abc.ABC):
 - 需要为业务/功能逻辑中所有关键节点/操作添加日志记录
 
 ## 日志格式
-若用户没有特殊要求, 则使用如下日志格式:
-- format: ```"%(asctime)s [%(levelname)s] %(thread)d %(funcName)s:%(lineno)d %(message)s"```
-- ```日志中的message部分默认使用json string来构建```.
-- handler: ```logging.handlers.TimedRotatingFileHandler```. 相关参数为: when='D', interval=1, backupCount=7, encoding='utf-8'.
+
+日志必须使用 **全量 JSON 格式**，通过自定义 `JsonFormatter` 实现。
+
+### Formatter 实现
+
+项目应实现一个继承 `logging.Formatter` 的 `JsonFormatter` 类，将每条日志序列化为单行 JSON 字符串。
+
+**固定输出字段**（7 个基础字段来自 LogRecord 标准属性）：
+
+| 字段 | 来源 | 说明 |
+|------|------|------|
+| `timestamp` | `record.created` | ISO 8601 北京时间格式（UTC+8，如 `2026-06-18T18:30:00.123456+08:00`） |
+| `level` | `record.levelname` | 日志级别（DEBUG/INFO/WARNING/ERROR） |
+| `thread` | `record.thread` | 线程 ID |
+| `logger` | `record.name` | logger 名称，用于定位模块 |
+| `function` | `record.funcName` | 函数名 |
+| `line` | `record.lineno` | 行号 |
+| `message` | `record.getMessage()` | 日志消息文本 |
+
+### extra 透出机制
+
+调用方通过 `logger.info(msg, extra={...})` 传入业务字段，`JsonFormatter` 自动将其提升到 JSON 顶层。
+
+```python
+# 正确写法：结构化数据通过 extra 传入
+logger.info("会话已删除", extra={"request_id": req_id, "conversation_id": conversation_id})
+# 输出：{"timestamp":"...","level":"INFO","message":"会话已删除","request_id":"a1b2","conversation_id":"conv-001"}
+```
+
+**规则**：
+- message 中保留对排查有帮助的简短自然语言描述
+- 可被过滤/聚合的结构化标识（ID、名称、状态值）必须通过 `extra` 传入
+- 不允许使用 `%s` 或 f-string 将结构化数据嵌入 message 字符串
+- `extra` 中的 key 必须使用全拼 `snake_case`（如 `request_id`，不可缩写为 `req_id`）
+- 记录异常时必须使用 `logger.exception()`（自动附加 traceback），禁止用 `logger.error()`
+
+### 异常处理
+
+`JsonFormatter` 需包含以下边界情况处理：
+- 当 `record.exc_info` 非空时，自动追加 `traceback` 字段
+- 对 `extra` 中不可 JSON 序列化的值，降级为 `str()` 而非抛出 `TypeError`
+
+### 时间戳
+
+日志时间戳统一使用 ISO 8601 北京时间格式（UTC+8），通过 `datetime.fromtimestamp(record.created, tz=_CHINA_TZ).isoformat()` 生成。
+
+### 按级别分文件
+
+使用 `ExactLevelFilter`（或等价的 `LogLevelFilter`）将不同级别的日志分别写入独立文件（`debug.log`、`info.log`、`warning.log`、`error.log`）。
+
+### handler 配置
+
+- 文件 handler：`logging.handlers.TimedRotatingFileHandler`，参数 `when='D'`、`interval=1`、`backupCount=7`、`encoding='utf-8'`
+- console handler（Docker 环境）：`logging.StreamHandler`，输出到 stdout/stderr 供 Docker `json-file` driver 采集
+- **console 与 file handler 必须使用相同的 JsonFormatter**，保持格式统一
 
 ## 异常捕获
 - ```最外层的调用代码要保证存在一个“兜底”形式的异常捕获```, 保证不会丢失任何来自于内层被调用者抛出的异常.

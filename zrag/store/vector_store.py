@@ -135,7 +135,7 @@ class ChromaStore:
         metadatas = results['metadatas'][0]
         for i in range(len(ids)):
             if metadatas[i] is None:
-                logger.warning("similarity_search: metadata[%d] is None, chunk_id=%s", i, ids[i])
+                logger.warning("similarity_search: metadata is None", extra={"index": i, "chunk_id": ids[i]})
             output.append({
                 'id': ids[i],
                 'metadata': metadatas[i] if metadatas[i] is not None else {},

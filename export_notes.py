@@ -24,11 +24,11 @@ import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from zrag.log_formatter import JsonFormatter
 
 # ---- 日志配置（与项目统一格式） ----
-LOG_FORMAT = "%(asctime)s [%(levelname)s] %(thread)d %(funcName)s:%(lineno)d %(message)s"
 _handler = logging.StreamHandler(sys.stdout)
-_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+_handler.setFormatter(JsonFormatter())
 logger = logging.getLogger("zrag.export_notes")
 logger.addHandler(_handler)
 logger.setLevel(logging.INFO)
@@ -259,7 +259,7 @@ class NotesExporter:
 
             return None
         except Exception:
-            logger.exception("模糊匹配失败: note_name=%s", note_name)
+            logger.exception("模糊匹配失败", extra={"note_name": note_name})
             return None
 
     def _get_note_content(self, note_name: str) -> Optional[str]:
@@ -301,7 +301,7 @@ class NotesExporter:
                 return None
             return content
         except Exception:
-            logger.exception("获取笔记内容失败(将尝试模糊匹配): note_name=%s", note_name)
+            logger.exception("获取笔记内容失败(将尝试模糊匹配)", extra={"note_name": note_name})
             # 尝试模糊匹配作为最后的备选方案
             matched_name = self._find_note_by_fuzzy_match(note_name)
             if matched_name:
@@ -350,7 +350,7 @@ class NotesExporter:
                 return []
             return [name.strip() for name in output.split(",")]
         except Exception:
-            logger.exception("按标签/文件夹获取笔记列表失败: tag_or_folder=%s", tag_or_folder)
+            logger.exception("按标签/文件夹获取笔记列表失败", extra={"tag_or_folder": tag_or_folder})
             return []
 
     def _sanitize_filename(self, filename: str) -> str:
@@ -421,7 +421,7 @@ class NotesExporter:
             parts = output.split("§§§", 2)
             return {"id": parts[0] if len(parts) > 0 else "", "folder": parts[1] if len(parts) > 1 else "", "tags": parts[2] if len(parts) > 2 else ""}
         except Exception:
-            logger.exception("获取笔记元数据失败: note_name=%s", note_name)
+            logger.exception("获取笔记元数据失败", extra={"note_name": note_name})
             return {"id": "", "folder": "", "tags": ""}
 
 
@@ -513,7 +513,7 @@ def _write_note_json(
             json.dump(note_data, f, ensure_ascii=False, indent=2)
         return True
     except OSError:
-        logger.exception("写入笔记文件失败: note_id=%s, file_path=%s", note_id, note_file)
+        logger.exception("写入笔记文件失败", extra={"note_id": note_id, "file_path": str(note_file)})
         return False
 
 
@@ -578,27 +578,26 @@ def _do_export(args):
     @raises SystemExit: 预期内的错误场景（目录不存在、manifest 缺失等）直接退出
     """
     logger.info("===== 导出开始 =====")
-    logger.info("task_id=%s tag=%s", args.task_id, args.tag or "(无)")
+    logger.info("导出参数", extra={"task_id": args.task_id, "tag": args.tag or "(无)"})
 
     base_dir = Path(__file__).resolve().parent
     export_dir = base_dir / "data" / "pro" / "export" / args.task_id
-    logger.info("导出目录: %s", export_dir)
+    logger.info("导出目录", extra={"export_dir": str(export_dir)})
 
     if not export_dir.exists():
-        logger.error("导出目录不存在: %s", export_dir)
+        logger.error("导出目录不存在", extra={"export_dir": str(export_dir)})
         sys.exit(1)
 
     # ---- 加载 manifest ----
     logger.info("加载 manifest.json...")
     try:
         manifest = load_manifest(export_dir)
-        logger.info("manifest.json 加载成功 (processed_docs=%d)",
-                    len(manifest.get("processed_docs", [])))
+        logger.info("manifest.json 加载成功", extra={"processed_docs": len(manifest.get("processed_docs", []))})
     except FileNotFoundError as e:
-        logger.error("%s", e)
+        logger.error("manifest.json 不存在", extra={"error": str(e)})
         sys.exit(1)
     except (json.JSONDecodeError, RuntimeError) as e:
-        logger.error("manifest.json 解析失败: %s", e)
+        logger.error("manifest.json 解析失败", extra={"error": str(e)})
         sys.exit(1)
 
     processed = {
@@ -608,14 +607,14 @@ def _do_export(args):
 
     # ---- 获取笔记名称列表（使用 NotesExporter） ----
     exporter = NotesExporter()
-    logger.info("正在从 Notes.app 获取笔记 (tag=%s)...", args.tag or "(无)")
+    logger.info("正在从 Notes.app 获取笔记", extra={"tag": args.tag or "(无)"})
 
     if args.tag:
         note_names = exporter.get_notes_by_tag_or_folder(args.tag)
     else:
         note_names = exporter._get_all_notes_names()
 
-    logger.info("获取笔记名称 (总数=%d, tag=%s)", len(note_names), args.tag or "(无)")
+    logger.info("获取笔记名称", extra={"total": len(note_names), "tag": args.tag or "(无)"})
 
     if not note_names:
         logger.warning("没有获取到任何笔记，导出结束")
@@ -631,7 +630,7 @@ def _do_export(args):
     for idx, note_name in enumerate(note_names, 1):
         html_content = exporter._get_note_content(note_name)
         if html_content is None:
-            logger.warning("[%d/%d] 笔记内容获取失败: %s (tag=%s)", idx, total_notes, note_name, args.tag or "(无)")
+            logger.warning("笔记内容获取失败", extra={"index": idx, "total": total_notes, "note_name": note_name, "tag": args.tag or "(无)"})
             continue
 
         meta = exporter._get_note_metadata(note_name)
@@ -643,12 +642,11 @@ def _do_export(args):
 
         if note_id and note_id in processed and processed[note_id] == note_hash:
             skipped += 1
-            logger.debug("[%d/%d] 跳过未变更: %s", idx, total_notes, note_name)
+            logger.debug("跳过未变更", extra={"index": idx, "total": total_notes, "note_name": note_name})
             continue
 
         expected += 1
-        logger.info("[%d/%d] 导出: %s (folder=%s)",
-                    idx, total_notes, note_name, note_folder)
+        logger.info("导出笔记", extra={"index": idx, "total": total_notes, "note_name": note_name, "folder": note_folder})
 
         note_data = {
             "source_id": note_id,
@@ -665,7 +663,7 @@ def _do_export(args):
         if _write_note_json(note_id, note_data, export_dir):
             success += 1
         else:
-            logger.warning("[%d/%d] 笔记写入失败: %s (tag=%s, folder=%s)", idx, total_notes, note_name, args.tag or "(无)", note_folder)
+            logger.warning("笔记写入失败", extra={"index": idx, "total": total_notes, "note_name": note_name, "tag": args.tag or "(无)", "folder": note_folder})
 
     # ---- 写入 result.json ----
     logger.info("写入 result.json...")
@@ -673,12 +671,11 @@ def _do_export(args):
         _write_result_json(export_dir, args.task_id, expected, success)
         logger.info("result.json 写入成功")
     except OSError as e:
-        logger.exception("写入 result.json 失败: %s", e)
+        logger.exception("写入 result.json 失败", extra={"error": str(e)})
         sys.exit(1)
 
     logger.info("===== 导出完成 =====")
-    logger.info("统计: 总数=%d 跳过=%d 计划=%d 成功=%d 失败=%d",
-                total_notes, skipped, expected, success, expected - success)
+    logger.info("导出统计", extra={"total": total_notes, "skipped": skipped, "expected": expected, "success": success, "failed": expected - success})
 
 
 if __name__ == "__main__":

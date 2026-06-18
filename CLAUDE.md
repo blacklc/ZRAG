@@ -2,13 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## subagent使用注意事项
+- 如果在使用subagent过程中建立了git worktree, 则```务必在worktree中的代码已经合并回指定分支后后清理相应的worktree```. 
+- ```在创建subagent时候, 必须要在prompt中告知它是一个subagent.```
+
 ## 主session的操作限制
-- **不允许在主session中进行任何探索、编写代码、测试以及运维的相关操作**.
+- **不允许在主session中进行任何探索、编写代码、测试以及运维的相关操作.如果当前session为一个subagent,则无需执行该规则**.
 - **主session中不允许进行的操作请使用subagent来完成**.
 - 当任务执行失败时，请通知我，并说明失败原因以及你建议的替代方案。等待我确认后再继续。
 - ```如果subagent执行失败, 不允许你自己直接在主session中重试subagent中的相关操作, 而是应该通知用户失败的原因,等待用户的下一步指示!!!```
 
-```再次强调,不允许在主session中进行任何探索、编写代码、测试以及运维的相关操作!!!```.
+```再次强调,不允许在主session中进行任何探索、编写代码、测试以及运维的相关操作!如果当前session为一个subagent,则无需执行该规则!```.
 
 ## subagent的使用时机
 在以下这些场景中, 请使用subagent来完成:
@@ -22,17 +26,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 7. 一个或多个代码文件需要编辑多次时
 ```
 
-## subagent使用注意事项
-- 如果在使用subagent过程中建立了git worktree, 则```务必在worktree中的代码已经合并回指定分支后后清理相应的worktree```. 
-
 ## 关于session内容的留档
 当涉及到以下几个场景时, 应该提醒用户手动执行```/compact```命令手动压缩一下对话内容.
 - 完成一个功能模块的设计工作后
 - 解决了一个疑难问题后
 - 完成了一个工作流设计工作后
 - 完成了系统架构设计后
- 
-如果当前session还没有被添加别名, 则应提醒用户为其进行rename操作.
+- 如果当前session还没有被添加别名, 则应提醒用户为其进行rename操作.
 
 ## 数据库操作
 - **在对数据库进行写操作之前,务必需要得到用户的同意!!**
@@ -81,12 +81,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 在操作提交操作前, 请先向用户确认需要提交的目标分支是否正确, 或是否需要新建一个分支进行提交等细节.
 - **针对一段代码实现, 如果其测试未通过,则不允许提交相应的代码.**
 
-## 编码规则
-在实际的编码工作或测试工作中,当你需要对原有设计的代码结构进行修改时, 在操作前请务必先取得用户的同意.
-上述所说的场景可能包括:
-- 变更原有设计中的项目文件目录结构
-- 修改原有设计中的代码段
-
 ## 代码风格
 如果涉及到编写代码的工作, 请务必参考```@.claude/rules/*-code-style.md```中的代码编写规范.
 
@@ -99,9 +93,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Debug/测试操作规范
 如果涉及到Debug或联调工作, 请务必参考```@.claude/rules/debug.md```中的行为规范.
 
-## 获取网页内容
-- 请注意使用一个subagent来使用fetch-url skill.
-- 当使用claude code自带的Fetch tool发生失败/异常时, 请该用fetch-url skill来获取web页面信息.
 
 ## 需求/问题解决流程
 当讨论一个新需求或问题的实现时, 请遵循以下流程开展相关工作:
@@ -112,9 +103,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 日志收集
 - 如果需要查看已部署的后端项目日志, 请直接去logs/pro目录中查看即可, 无需进入到容器中查看.
+- 测试环境的日志会打印到`@logs/中`
+- 部署运行环境的日志会打印到`@logs/pro中`
 
 ## 构建镜像
-```无论在什么场景内,只要存在执行构建镜像操作,必须提醒用户调整宿主机网络```.
+- ```在构建镜像时,必须使用--pull=false 依赖本地缓存```,以防止docker build时访问Docker Hub。 如果是第一次构建镜像, 则跳过这条规则.
 
 ## 实现路径
 按 `docs/PLAN.md` 的 45 个切片顺序实现，不能跳过依赖的上游切片。每个 AFK 切片必须自带测试代码。测试连续 3 次不通过则自动升级为 HITL。
@@ -126,7 +119,3 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `@docs/diagrams/` - 项目架构图存储目录
 - `@docs/design.md` — 项目系统架构设计文档
 - `@/Users/lichen/Documents/workspace/zonebank/README.md` - 文章风格参考文档
-
-## 项目日志
-- 测试环境的日志会打印到`@logs/中`
-- 部署运行环境的日志会打印到`@logs/pro中`

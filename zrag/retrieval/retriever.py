@@ -94,7 +94,7 @@ class Retriever:
         @type:   list[SearchResult]
         """
         if summary is not None:
-            logger.debug("hybrid_search with summary (len=%d)", len(summary))
+            logger.debug("hybrid_search with summary", extra={"summary_len": len(summary)})
 
         if self.query_rewriter is not None:
             try:
@@ -102,8 +102,8 @@ class Retriever:
                 fts5_query = rewritten['keywords']
                 vector_query = rewritten['refined_query']
                 logger.info(
-                    "QueryRewriter 改写成功: fts5_query=%s vector_query=%s",
-                    fts5_query, vector_query,
+                    "QueryRewriter 改写成功",
+                    extra={"fts5_query": fts5_query, "vector_query": vector_query},
                 )
             except Exception:
                 logger.warning("QueryRewriter 调用失败，降级为原始 query")
@@ -234,8 +234,8 @@ class Retriever:
             )
             path_a_count += 1
             logger.info(
-                "Path A (keyword): chunk_id=%s doc_title=%s score=%.4f",
-                cid, kr['doc_title'], rrf_scores.get(cid, 0.0),
+                "Path A (keyword)",
+                extra={"chunk_id": cid, "doc_title": kr['doc_title'], "score": rrf_scores.get(cid, 0.0)},
             )
 
         # 对仅在 vector_results 中出现的 chunk_id, 尝试通过 SQLite 补充信息
@@ -258,22 +258,20 @@ class Retriever:
                     )
                     path_b_count += 1
                     logger.info(
-                        "Path B (vector+SQLite): chunk_id=%s doc_title=%s score=%.4f",
-                        cid, row['doc_title'], rrf_scores.get(cid, 0.0),
+                        "Path B (vector+SQLite)",
+                        extra={"chunk_id": cid, "doc_title": row['doc_title'], "score": rrf_scores.get(cid, 0.0)},
                     )
                 else:
                     meta = vr['metadata']
                     logger.warning(
-                        "Path C (skip): chunk_id=%s not found in SQLite, "
-                        "metadata_keys=%s, skipping",
-                        cid,
-                        list(meta.keys()) if meta else [],
+                        "Path C (skip): chunk_id=%s not found in SQLite, skipping",
+                        extra={"chunk_id": cid, "metadata_keys": list(meta.keys()) if meta else []},
                     )
                     continue
 
         logger.info(
-            "_build_results: total=%d (path_a=%d path_b=%d) k=%d",
-            len(result_map), path_a_count, path_b_count, k,
+            "_build_results",
+            extra={"total": len(result_map), "path_a": path_a_count, "path_b": path_b_count, "k": k},
         )
 
         results = sorted(result_map.values(), key=lambda r: r.score, reverse=True)

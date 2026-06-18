@@ -175,8 +175,7 @@ class IngestionPipeline:
             raise TypeError(
                 f"source 必须是 DocumentSource 的子类，实际类型: {type(source).__name__}"
             )
-        logger.info("Pipeline 开始执行, batch_size=%d, full=%s",
-                     self.batch_size, full)
+        logger.info("Pipeline 开始执行", extra={"batch_size": self.batch_size, "full": full})
         # 将取消回调注入 Source，使轮询等待可被中断
         if should_cancel and hasattr(source, 'should_cancel'):
             source.should_cancel = should_cancel
@@ -241,7 +240,7 @@ class IngestionPipeline:
                     report.updated += 1
 
             except Exception as e:
-                logger.exception("文档 %s 处理失败: %s", doc.source_id, str(e))
+                logger.exception("文档处理失败", extra={"source_id": doc.source_id, "error": str(e)})
                 report.failed += 1
                 error_event = ErrorEvent(
                     source_id=doc.source_id,
@@ -255,7 +254,5 @@ class IngestionPipeline:
                 if on_document_done:
                     on_document_done()
 
-        logger.info("Pipeline 执行完成 total=%d new=%d updated=%d skipped=%d failed=%d",
-                     report.total, report.new, report.updated,
-                     report.skipped, report.failed)
+        logger.info("Pipeline 执行完成", extra={"total": report.total, "new": report.new, "updated": report.updated, "skipped": report.skipped, "failed": report.failed})
         return report
