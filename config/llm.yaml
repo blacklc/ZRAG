@@ -7,3 +7,4 @@ llm:
     base_url: "${LLM_GATEWAY_URL:-http://localhost:4000/v1}"
     api_key: "${LITELLM_MASTER_KEY:-sk-dummy}"
     model: "smart-router"
+    rewriter_model: "${REWRITER_LLM_MODEL:-qwen3:4b-instruct-2507-q4_K_M}"

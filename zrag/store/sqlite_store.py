@@ -4,6 +4,9 @@ from typing import Any
 
 from zrag.models.document import Chunk
 import jieba
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _tokenize_text(text: str) -> str:
@@ -68,6 +71,7 @@ class SQLiteStore:
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.isolation_level = None
+            self._migrate(self._conn)
         return self._conn
 
     def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
@@ -306,6 +310,8 @@ class SQLiteStore:
             CREATE TABLE IF NOT EXISTS conversations (
                 id         TEXT PRIMARY KEY,
                 title      TEXT NOT NULL,
+                summary         TEXT NOT NULL DEFAULT '',
+                summary_updated_at TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
@@ -335,6 +341,33 @@ class SQLiteStore:
                 updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
+
+        # 迁移: 为旧 schema 补全新列
+        self._migrate(conn)
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """执行数据库迁移，兼容旧 schema
+
+        逐条尝试 ALTER TABLE ADD COLUMN，若列已存在则忽略异常。
+        当前迁移列表:
+          - conversations 表新增 summary / summary_updated_at 列
+
+        @param conn: SQLite 数据库连接对象
+        @type  conn: sqlite3.Connection
+        """
+        migrations = [
+            "ALTER TABLE conversations ADD COLUMN summary TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE conversations ADD COLUMN summary_updated_at TEXT NOT NULL DEFAULT ''",
+        ]
+        logger.info("数据库迁移开始, 待执行迁移数量: %d", len(migrations))
+        for sql in migrations:
+            try:
+                conn.execute(sql)
+                logger.info("迁移执行成功: %s", sql)
+            except sqlite3.OperationalError:
+                logger.debug("列已存在跳过: %s", sql)  # Column already exists, skip
+        logger.info("数据库迁移完成")
 
     def close(self) -> None:
         """关闭数据库连接

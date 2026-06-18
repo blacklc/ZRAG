@@ -43,18 +43,21 @@ class QueryRewriter:
         self._env = Environment(loader=FileSystemLoader(prompts_dir))
         self._template = self._env.get_template('query_rewrite.j2')
 
-    def rewrite(self, query: str) -> dict:
+    def rewrite(self, query: str, summary: str | None = None) -> dict[str, str]:
         """改写用户查询
+
+        支持传入 multi-turn 对话上下文摘要以辅助指代消解。
 
         @param query: 用户原始查询
         @type  query: str
+        @param summary: 多轮对话上下文摘要，用于指代消解
+        @type  summary: str | None
 
         @return: {"keywords": "...", "refined_query": "..."}
                  解析失败时降级返回 {"keywords": query, "refined_query": query}
         @rtype:  dict
         """
-        prompt = self._template.render(query=query)
-        messages = [{"role": "system", "content": prompt}]
+        messages = self._render_messages(query, summary)
 
         try:
             response = self._llm.chat(messages)
@@ -69,6 +72,28 @@ class QueryRewriter:
                 "Query rewriting failed: %s, falling back to original query", e
             )
             return {"keywords": query, "refined_query": query}
+
+    def _render_messages(self, query: str, summary: str | None = None) -> list[dict]:
+        """构建 LLM 调用消息列表
+
+        如果有对话上下文摘要，则将其注入到 user message 中。
+
+        @param query: 用户原始查询
+        @type  query: str
+        @param summary: 多轮对话上下文摘要，用于指代消解
+        @type  summary: str | None
+
+        @return: 消息列表，包含 system 和 user 两条消息
+        @rtype:  list[dict]
+        """
+        system_prompt = self._template.render()
+        user_content = query
+        if summary:
+            user_content = f"对话上下文摘要：{summary}\n\n当前用户查询：{query}"
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
 
     def _parse_response(self, response: str, query: str) -> dict:
         """解析 LLM 返回的 JSON
@@ -99,9 +124,15 @@ class QueryRewriter:
 
         try:
             result = json.loads(text)
+            keywords = result.get("keywords", query)
+            refined_query = result.get("refined_query", query)
+            logger.info(
+                "QueryRewriter result: query=%s, keywords=%s, refined_query=%s",
+                query, keywords, refined_query,
+            )
             return {
-                "keywords": result.get("keywords", query),
-                "refined_query": result.get("refined_query", query),
+                "keywords": keywords,
+                "refined_query": refined_query,
             }
         except json.JSONDecodeError:
             logger.warning(

@@ -1,5 +1,7 @@
 # ZRAG 实现计划
 
+> 最后更新: 2026-06-17
+
 ## 切片规则
 
 | 规则 | 说明 |
@@ -168,9 +170,11 @@
 
 | 类型 | 数量 |
 |------|:--:|
-| AFK | 57 |
+| AFK | 84 |
 | HITL | 1（#14 LLMGatewayProvider） |
-| 总计 | 58 |
+| 已完成 | 83 |
+| 待完成 | 2（#61 ⚠️, #109 ⬜） |
+| 总计 | 85 |
 
 ---
 
@@ -265,7 +269,17 @@
 | 106b | Retriever 集成 QueryRewriter | ✅ | 6 | `(待提交)` |
 | 107 | 候选池 k×2 扩大 | ✅ | 6 | `(待提交)` |
 | 108 | RRF 可配置权重 | ✅ | 6 | `(待提交)` |
-| 109 | 全链路验证（构建部署+DB清空） | ✅ | - | `(待提交)` |
+| 109 | 全链路验证（构建部署+DB清空） | ⬜ | - | - |
+| 110 | DB Schema — conversations 表 summary 字段 | ⬜ | - | - |
+| 111 | 配置 — rewriter_model + summary_max_chars | ⬜ | - | - |
+| 112 | QueryRewriter 上下文感知改写 | ⬜ | - | - |
+| 113 | Retriever 透传 summary + 降级 | ⬜ | 112 | - |
+| 114 | compress.j2 压缩模板 | ⬜ | - | - |
+| 115 | ConversationSummarizer 类 | ⬜ | 114, 111 | - |
+| 116 | CompressService 异步压缩调度 | ⬜ | 115 | - |
+| 117 | views.py 多轮对话全流程集成 | ⬜ | 110,111,113,116 | - |
+| 118 | Ollama 基础设施部署 | ⚠ HITL | - | - |
+| 119 | 摘要注入 LLM 生成 + 历史缩减（LIMIT 10→3） | AFK | 117 | - |
 
 - ✅ 已完成 · 🔄 进行中 · ⬜ 待开始 · ⚠ HITL 升级
 
@@ -349,5 +363,45 @@
 | 70 | `_build_results()` 传递 `chunk_index` | AFK | 69 |
 | 71 | `build_rag_prompt()` 同源 chunks 合并 | AFK | 70 |
 | 72 | 清空数据库 + 端到端验证 | AFK | 62,64,68,71 |
+
+### 多轮对话优化（#110-#117）— 指代消解 + 上下文感知检索 + 本地小模型
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 110 | DB Schema — conversations 表新增 summary、summary_updated_at 字段 + _migrate() | AFK | 无 |
+| 111 | 配置更新 — llm.yaml 新增 rewriter_model + retrieval.yaml 新增 summary_max_chars | AFK | 无 |
+| 112 | QueryRewriter 支持上下文感知 — rewrite() 增加 summary 参数 + query_rewrite.j2 模板（指代消解指令 + 核心词提取策略） | AFK | 无 |
+| 113 | Retriever 透传 summary + 改写失败降级 — hybrid_search() 签名扩展 + try/except 降级为原始 query | AFK | 112 |
+| 114 | compress.j2 压缩 prompt 模板 | AFK | 无 |
+| 115 | ConversationSummarizer 类 — 增量压缩 + 输出清理前缀 + max_chars 截断 | AFK | 114, 111 |
+| 116 | CompressService 异步压缩调度 — 复用 ZRAG_INGEST_EXECUTOR + 独立 SqliteStore + 静默失败 | AFK | 115 |
+| 117 | views.py 多轮对话全流程集成 — create/add_message 读 summary + 触发异步压缩 | AFK | 110, 111, 113, 116 |
+| 118 | Ollama 基础设施 — Docker 独立部署 + Qwen3.5-9B 下载 + LiteLLM Gateway 注册 | HITL | 无 |
+| 119 | 摘要注入 LLM 生成阶段 + 历史缩减 — LIMIT 10→3，summary 作为第 2 条 system 消息 | AFK | 117 |
+
+### 多轮对话优化切片依赖图
+
+```
+110 ────────────┐
+111 ──→ 115 ──→ 116 ──→ 117 ──→ 119
+112 ──→ 113 ────────────┘
+114 ──→ 115
+118（HITL，独立并行）
+```
+
+### 各切片覆盖层
+
+| # | 切片 | 覆盖层（端到端） |
+|:--:|------|------|
+| 110 | DB Schema | `sqlite_store.py` CREATE TABLE → `_migrate()` → 单元测试 |
+| 111 | 配置更新 | `config/llm.yaml` → `config/retrieval.yaml` → settings 加载验证 |
+| 112 | QueryRewriter | `query_rewriter.py` 签名 → `query_rewrite.j2` 模板 → 单元测试 |
+| 113 | Retriever | `retriever.py` hybrid_search() → 降级逻辑 → 单元测试 |
+| 114 | 压缩模板 | `compress.j2` → Jinja2 渲染验证 |
+| 115 | Summarizer | `compress.j2` → `ConversationSummarizer` → 输出清理 → 单元测试 |
+| 116 | 异步调度 | `CompressService` → `ZRAG_INGEST_EXECUTOR` → 独立 SqliteStore → 单元测试 |
+| 117 | API 集成 | `views.py` create/add_message → 读 summary → 触发压缩 → 集成测试（3 轮对话） |
+| 118 | 模型部署 | Docker → Ollama → Qwen3.5-9B → LiteLLM Gateway 配置 → 连通性验证 |
+| 119 | 摘要注入生成 | `views.py` add_message() — summary 作为第 2 条 system 消息 → `LIMIT 10` 改为 `LIMIT 3` → 全链路验证 |
 
 

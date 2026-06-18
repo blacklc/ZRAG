@@ -33,7 +33,21 @@ class TestQueryRewriter:
         with tempfile.TemporaryDirectory() as tmpdir:
             template_path = os.path.join(tmpdir, 'query_rewrite.j2')
             with open(template_path, 'w') as f:
-                f.write("{{ query }}")
+                f.write("""你是一个查询优化助手。你的任务是将用户的日常口语化查询改写为更适合检索的结构化格式。
+
+任务说明:
+1. 从用户查询中提取核心关键词，用空格分隔，用于全文检索
+2. 将用户查询精炼改写为简洁、规范的自然语言查询，用于语义检索
+3. 如果提供了对话上下文摘要，请结合摘要识别并消解指代关系。将"它""这个""那个""这些"等指代词替换为上下文中对应的具体实体名称。
+4. 关键词提取时注意：对于复合概念术语，只保留最核心的名词，去掉修饰性前缀。例如 "实现原理" 提取为 "原理"。
+5. 输出必须是纯 JSON 格式，不要使用 markdown 代码块包裹
+
+输出格式要求:
+- 必须输出纯 JSON 对象，不要包含任何 markdown 标记或代码块
+- JSON 对象必须包含以下两个字段：
+  - "keywords": 空格分隔的关键词字符串，关键词应为核心术语，去除停用词和修饰语
+  - "refined_query": 精炼改写后的自然语言查询语句，保持语义不变但更简洁规范
+""")
             yield tmpdir
 
     @pytest.fixture
@@ -156,3 +170,99 @@ class TestQueryRewriter:
         })
         result = rewriter.rewrite("")
         assert result == {"keywords": "", "refined_query": ""}
+
+    def test_synonym_replacement_in_keywords(self, rewriter, llm_provider):
+        """同义词替换: LLM 返回同义词替换后的 keywords, 验证能被正确解析"""
+        llm_provider.chat.return_value = json.dumps({
+            "keywords": "Kubernetes 默认调度器 工作原理",
+            "refined_query": "详细讲解 Kubernetes 默认调度器的实现原理",
+        })
+        result = rewriter.rewrite("详细讲解Kubernetes默认调度器的实现原理")
+        assert result["keywords"] == "Kubernetes 默认调度器 工作原理"
+        assert "工作原理" in result["keywords"]
+        assert "实现原理" not in result["keywords"]
+
+    def test_synonym_keeps_space_delimited_format(self, rewriter, llm_provider):
+        """同义词替换后 keywords 格式验证: 验证仍是空格分隔字符串"""
+        llm_provider.chat.return_value = json.dumps({
+            "keywords": "容器 编排 工作原理",
+            "refined_query": "容器编排的工作原理",
+        })
+        result = rewriter.rewrite("容器编排是怎么实现的")
+        raw_keywords = result["keywords"]
+        # 验证是空格分隔的字符串
+        tokens = raw_keywords.split()
+        assert len(tokens) >= 1
+        assert " " in raw_keywords
+        # 验证每个 token 都不包含空格
+        for token in tokens:
+            assert " " not in token
+
+    # ---- 上下文感知改写相关测试 ----
+
+    def test_rewrite_with_summary(self, rewriter, llm_provider):
+        """传入对话上下文摘要: 验证摘要被注入到 LLM 消息中"""
+        llm_provider.chat.return_value = json.dumps({
+            "keywords": "Pod 水平自动伸缩 配置",
+            "refined_query": "如何为 Kubernetes Pod 配置水平自动伸缩",
+        })
+        result = rewriter.rewrite(
+            "怎么给它配置自动伸缩",
+            summary="用户正在询问 Kubernetes Pod 的水平自动伸缩配置",
+        )
+        assert result["keywords"] == "Pod 水平自动伸缩 配置"
+        assert result["refined_query"] == "如何为 Kubernetes Pod 配置水平自动伸缩"
+        # 验证 LLM 收到的消息包含摘要
+        llm_provider.chat.assert_called_once()
+        args, _ = llm_provider.chat.call_args
+        messages = args[0]
+        assert len(messages) == 2
+        assert messages[1]["role"] == "user"
+        assert "对话上下文摘要" in messages[1]["content"]
+        assert "Pod 的水平自动伸缩配置" in messages[1]["content"]
+
+    def test_rewrite_without_summary(self, rewriter, llm_provider):
+        """不传摘要: 验证向后兼容, 行为与旧版本一致"""
+        llm_provider.chat.return_value = json.dumps({
+            "keywords": "Kubernetes 自动伸缩",
+            "refined_query": "如何在 Kubernetes 中配置自动伸缩",
+        })
+        result = rewriter.rewrite("怎么在k8s里配自动伸缩啊")
+        assert result == {
+            "keywords": "Kubernetes 自动伸缩",
+            "refined_query": "如何在 Kubernetes 中配置自动伸缩",
+        }
+        # 验证 LLM 收到的 user message 不包含摘要前缀
+        llm_provider.chat.assert_called_once()
+        args, _ = llm_provider.chat.call_args
+        messages = args[0]
+        assert len(messages) == 2
+        assert messages[1]["role"] == "user"
+        assert messages[1]["content"] == "怎么在k8s里配自动伸缩啊"
+        assert "对话上下文摘要" not in messages[1]["content"]
+
+    def test_coreference_resolution(self, rewriter, llm_provider):
+        """指代消解: 验证带指代词的查询能被正确改写"""
+        llm_provider.chat.return_value = json.dumps({
+            "keywords": "Python 文件编码",
+            "refined_query": "Python 读取文件时编码错误的原因和解决方法",
+        })
+        result = rewriter.rewrite(
+            "它是什么原因导致的",
+            summary="用户在使用 Python 读取文件时遇到了编码错误",
+        )
+        assert result["keywords"] == "Python 文件编码"
+        # 验证 refined_query 中不包含指代词
+        assert "它" not in result["refined_query"]
+        assert "编码" in result["refined_query"]
+
+    def test_core_term_extraction(self, rewriter, llm_provider):
+        """核心词提取: 验证复合概念术语只保留核心名词"""
+        llm_provider.chat.return_value = json.dumps({
+            "keywords": "Kubernetes 默认调度器 原理",
+            "refined_query": "详细讲解 Kubernetes 默认调度器的实现原理",
+        })
+        result = rewriter.rewrite("详细讲解Kubernetes默认调度器的实现原理")
+        assert result["keywords"] == "Kubernetes 默认调度器 原理"
+        assert "实现原理" not in result["keywords"]
+        assert "原理" in result["keywords"]

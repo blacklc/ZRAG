@@ -13,6 +13,7 @@ import pytest
 
 from zrag.embed.base import EmbeddingModel
 from zrag.models.retrieval import SearchResult
+from zrag.retrieval.query_rewriter import QueryRewriter
 from zrag.retrieval.retriever import Retriever
 
 
@@ -225,6 +226,102 @@ class TestRetriever:
 
         assert len(results) == 0
         assert results == []
+
+    def test_hybrid_search_with_summary(self):
+        """传参 summary 时, QueryRewriter.rewrite 应收到 summary"""
+        from unittest.mock import MagicMock
+
+        sqlite_store, chroma_store, embedder = self._make_mocks()
+
+        chroma_store.similarity_search.return_value = [
+            {'id': 'chunk_1', 'metadata': {'doc_title': 'D1', 'source_id': 's1',
+                                            'source_type': 'txt'}, 'distance': 0.1},
+        ]
+        sqlite_store.search_fts5.return_value = [
+            {'chunk_id': 'chunk_1', 'content': 'C1', 'doc_title': 'D1',
+             'source_id': 's1', 'source_type': 'txt', 'bm25_score': -5.0},
+        ]
+
+        mock_rewriter = MagicMock(spec=QueryRewriter)
+        mock_rewriter.rewrite.return_value = {
+            'keywords': 'keywords',
+            'refined_query': 'refined',
+        }
+
+        retriever = Retriever(
+            sqlite_store=sqlite_store,
+            chroma_store=chroma_store,
+            embedder=embedder,
+            query_rewriter=mock_rewriter,
+        )
+        retriever.hybrid_search('test query', k=3, summary='test summary')
+
+        mock_rewriter.rewrite.assert_called_once_with('test query', 'test summary')
+
+    def test_hybrid_search_without_summary(self):
+        """不传 summary 时, rewrite 的 summary 参数应为 None"""
+        from unittest.mock import MagicMock
+
+        sqlite_store, chroma_store, embedder = self._make_mocks()
+
+        chroma_store.similarity_search.return_value = [
+            {'id': 'chunk_1', 'metadata': {'doc_title': 'D1', 'source_id': 's1',
+                                            'source_type': 'txt'}, 'distance': 0.1},
+        ]
+        sqlite_store.search_fts5.return_value = [
+            {'chunk_id': 'chunk_1', 'content': 'C1', 'doc_title': 'D1',
+             'source_id': 's1', 'source_type': 'txt', 'bm25_score': -5.0},
+        ]
+
+        mock_rewriter = MagicMock(spec=QueryRewriter)
+        mock_rewriter.rewrite.return_value = {
+            'keywords': 'keywords',
+            'refined_query': 'refined',
+        }
+
+        retriever = Retriever(
+            sqlite_store=sqlite_store,
+            chroma_store=chroma_store,
+            embedder=embedder,
+            query_rewriter=mock_rewriter,
+        )
+        retriever.hybrid_search('test query', k=3)
+
+        mock_rewriter.rewrite.assert_called_once_with('test query', None)
+
+    def test_rewrite_failure_fallback(self):
+        """QueryRewriter 抛出异常时, 应降级使用原始 query, 检索仍正常返回"""
+        from unittest.mock import MagicMock
+
+        sqlite_store, chroma_store, embedder = self._make_mocks()
+
+        chroma_store.similarity_search.return_value = [
+            {'id': 'chunk_1', 'metadata': {'doc_title': 'D1', 'source_id': 's1',
+                                            'source_type': 'txt'}, 'distance': 0.1},
+        ]
+        sqlite_store.search_fts5.return_value = [
+            {'chunk_id': 'chunk_1', 'content': 'C1', 'doc_title': 'D1',
+             'source_id': 's1', 'source_type': 'txt', 'bm25_score': -5.0},
+        ]
+
+        mock_rewriter = MagicMock(spec=QueryRewriter)
+        mock_rewriter.rewrite.side_effect = RuntimeError("rewrite failed")
+
+        retriever = Retriever(
+            sqlite_store=sqlite_store,
+            chroma_store=chroma_store,
+            embedder=embedder,
+            query_rewriter=mock_rewriter,
+        )
+        results = retriever.hybrid_search('test query', k=3)
+
+        # 降级后应使用原始 query 进行向量 embedding
+        embedder.embed_query.assert_called_once_with('test query')
+        # 降级后应使用原始 query 进行关键词检索
+        sqlite_store.search_fts5.assert_called_once_with('test query', 6)
+        # 结果仍应正常返回
+        assert len(results) == 1
+        assert results[0].chunk_id == 'chunk_1'
 
 
 class TestBuildResultsChunkIndex:

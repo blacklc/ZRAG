@@ -9,6 +9,8 @@
 - 手动搜索无法处理"语义相近但用词不同"的查询
 - 无法对知识进行自然语言级别的归纳与问答
 - 中文查询场景下关键词检索无法匹配中文分词，导致混合检索退化为纯向量检索
+- **多轮追问时检索系统不理解对话上下文**：追问 "它的性能怎么样？" 时，系统不知道 "它" 指代什么，检索结果偏题；追问 "打分怎么做的" 时，"打分" 由上一轮 AI 回复引入，检索无法关联
+- **查询改写每次消耗 API 模型额度**：QueryRewriter 每次调用都走云 API，高频率低难度任务浪费资源
 
 ## 解决方案
 
@@ -18,11 +20,13 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 - **文档摄入**：从 macOS Notes 等来源自动拉取 → 分块 → 向量化 → 双库存储
 - **文档导出**：通过 AppleScript 从 macOS Notes.app 获取 HTML，经增强的 HTML→Markdown 转换器（五阶段流水线，覆盖 12 种标签）处理为结构化 Markdown
 - **混合检索**：语义检索（ChromaDB Cosine）+ 关键词检索（SQLite FTS5 BM25 + jieba 中文分词）→ RRF 融合排序 + 同源 chunk 合并
+- **上下文感知检索**：系统自动将每轮对话压缩为摘要，追问时 QueryRewriter 结合摘要解析指代（"它"→"Kubernetes 默认调度器"）并精炼查询，使检索结果始终针对当前上下文
 - **RAG 问答**：检索结果 → Prompt 构建 → LiteLLM Gateway → LLM 生成回答（附来源标注）
-- **会话管理**：多轮对话持久化，支持切换、继续和删除历史对话
+- **会话管理**：多轮对话持久化，支持切换、继续和删除历史对话；对话摘要逐轮自动更新
 - **Web UI**：Apple 风格聊天界面，深色/浅色模式切换，Markdown 渲染，代码高亮
 - **数据质量优化**：统一 chunk 大小为 1000 字符（适配 BGE-small 512 token 限制）、标签元数据透传 FTS5 索引、代码围栏标题误识别修复、Unicode NFC 规范化
-- **智能查询改写**：LLM 将口语化查询改写为结构化搜索表达（关键词 + 精炼查询），分别流入关键词和语义两条检索路径
+- **智能查询改写**：本地部署的小模型（Qwen3.5-9B）将口语化查询改写为结构化搜索表达（关键词 + 精炼查询），分别流入关键词和语义两条检索路径，节省 API 消费
+- **异步对话压缩**：每轮回答后后台异步将 Q&A 压缩为摘要，不阻塞用户请求，摘要持久化到数据库
 
 ## 用户故事
 
@@ -31,30 +35,35 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 3. 作为开发者，我希望每条 AI 回答都能标注引用来源，以便验证回答的准确性
 4. 作为注重隐私的用户，我希望所有数据都存储在本地，以便个人笔记不会离开我的设备
 5. 作为普通用户，我希望能够继续之前的对话，以便在已有问答的基础上进行追问
-6. 作为普通用户，我希望删除不需要的旧对话，以便保持对话历史的整洁
-7. 作为普通用户，我希望在浅色和深色模式之间切换，以便在白天和晚上都能舒适使用
-8. 作为技术用户，我希望 AI 回答中的代码块能够语法高亮，以便技术类回答易于阅读
-9. 作为普通用户，我希望 AI 生成回答时有加载动画，以便知道系统正在工作中
-10. 作为运维人员，我希望通过一条 docker compose up 命令完成部署，以便部署过程无痛苦
-11. 作为普通用户，我希望一键触发增量文档导入，以便新笔记能够快速被索引
-12. 作为普通用户，我希望看到导入进度指示，以便知道摄入正在进行中
-13. 作为普通用户，我希望 API 调用失败时显示明确的错误提示，以便知道出了什么问题
-14. 作为普通用户，我希望能够一键复制 AI 的回答内容，以便在其他地方复用
-15. 作为普通用户，我希望选择使用哪个 LLM 模型，以便在质量和速度之间做出权衡
-16. 作为普通用户，我希望用 Shift+Enter 输入多行问题，以便能够粘贴代码片段进行分析
-17. 作为开发者，我希望有一套 RESTful API 和一致的错误处理，以便在 ZRAG 之上构建集成
-18. 作为普通用户，我希望通过左侧边栏切换不同的历史对话，以便查阅之前的讨论
-19. 作为笔记用户，我希望在容器化部署中也能导入 macOS 备忘录，以便在无法直接调用 AppleScript 的环境中使用
-20. 作为普通用户，我希望在触发导入后看到实时进度（阶段名称 + 进度条），以便知道当前处于哪个阶段
-21. 作为普通用户，我希望能够取消正在进行的导入任务，以便在误操作或等待时间过长时终止
-22. 作为普通用户，我希望离开页面后再回来仍能看到正在进行的导入进度，以便追踪任务状态
-23. 作为普通用户，我希望选择按笔记标签过滤导出范围，以便只导入特定主题的笔记
-24. 作为技术用户，我希望检索系统能理解中文查询的关键词匹配，以便用中文提问时获得准确的检索结果
-25. 作为知识工作者，我希望同一篇文档的相关段落被合并展示，以便在 AI 回答中获得更连贯的上下文
-26. 作为知识工作者，我希望系统能理解我口语化的提问并将其优化为更精准的搜索表达，以便获得更相关的检索结果
-27. 作为笔记用户，我希望笔记的标签信息能被检索系统利用，以便按标签主题过滤和匹配相关内容
-28. 作为注重准确性的用户，我希望代码块中的注释符号不会被误判为文档标题，以便代码内容保持完整不被错误切分
-29. 作为知识工作者，我希望向量检索和关键词检索的融合权重可以按场景调整，以便在语义理解和精确匹配之间做出平衡
+6. 作为普通用户，我希望追问时系统能正确理解我在说什么，以便不需要每次都要重复完整的上一轮提问
+7. 作为普通用户，我希望追问中使用的指代词（如"它""这个"）能被正确解析，以便检索结果不会因为我用了代词而偏题
+8. 作为普通用户，我希望删除不需要的旧对话，以便保持对话历史的整洁
+9. 作为普通用户，我希望在浅色和深色模式之间切换，以便在白天和晚上都能舒适使用
+10. 作为技术用户，我希望 AI 回答中的代码块能够语法高亮，以便技术类回答易于阅读
+11. 作为普通用户，我希望 AI 生成回答时有加载动画，以便知道系统正在工作中
+12. 作为运维人员，我希望通过一条 docker compose up 命令完成部署，以便部署过程无痛苦
+13. 作为普通用户，我希望一键触发增量文档导入，以便新笔记能够快速被索引
+14. 作为普通用户，我希望看到导入进度指示，以便知道摄入正在进行中
+15. 作为普通用户，我希望 API 调用失败时显示明确的错误提示，以便知道出了什么问题
+16. 作为普通用户，我希望能够一键复制 AI 的回答内容，以便在其他地方复用
+17. 作为普通用户，我希望选择使用哪个 LLM 模型，以便在质量和速度之间做出权衡
+18. 作为普通用户，我希望用 Shift+Enter 输入多行问题，以便能够粘贴代码片段进行分析
+19. 作为开发者，我希望有一套 RESTful API 和一致的错误处理，以便在 ZRAG 之上构建集成
+20. 作为普通用户，我希望通过左侧边栏切换不同的历史对话，以便查阅之前的讨论
+21. 作为笔记用户，我希望在容器化部署中也能导入 macOS 备忘录，以便在无法直接调用 AppleScript 的环境中使用
+22. 作为普通用户，我希望在触发导入后看到实时进度（阶段名称 + 进度条），以便知道当前处于哪个阶段
+23. 作为普通用户，我希望能够取消正在进行的导入任务，以便在误操作或等待时间过长时终止
+24. 作为普通用户，我希望离开页面后再回来仍能看到正在进行的导入进度，以便追踪任务状态
+25. 作为普通用户，我希望选择按笔记标签过滤导出范围，以便只导入特定主题的笔记
+26. 作为技术用户，我希望检索系统能理解中文查询的关键词匹配，以便用中文提问时获得准确的检索结果
+27. 作为知识工作者，我希望同一篇文档的相关段落被合并展示，以便在 AI 回答中获得更连贯的上下文
+28. 作为知识工作者，我希望系统能理解我口语化的提问并将其优化为更精准的搜索表达，以便获得更相关的检索结果
+29. 作为笔记用户，我希望笔记的标签信息能被检索系统利用，以便按标签主题过滤和匹配相关内容
+30. 作为注重准确性的用户，我希望代码块中的注释符号不会被误判为文档标题，以便代码内容保持完整不被错误切分
+31. 作为知识工作者，我希望向量检索和关键词检索的融合权重可以按场景调整，以便在语义理解和精确匹配之间做出平衡
+32. 作为运维人员，我希望查询改写和对话压缩使用本地部署的小模型，以便减少对 API 模型额度的消耗
+33. 作为运维人员，我希望本地模型部署独立于项目，以便复用给其他项目
+34. 作为运维人员，我希望本地模型不可用时检索能自动降级使用原始查询，以便用户的问答请求不会中断
 
 ## 实现决策
 
@@ -64,8 +73,83 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 - API 框架：Django REST Framework（ViewSet + re_path 路由，v1/ 版本前缀）
 - 前端：Vue 3 + Vite + Tailwind CSS（Apple 风格 UI），与后端分离
 - WSGI Server：uWSGI（1 worker，180 秒 harakiri 超时）
-- LLM 网关：LiteLLM Gateway（自托管，OpenAI 兼容端点 localhost:4000/v1）
+- LLM 网关：LiteLLM Gateway（自托管，OpenAI 兼容端点 localhost:4000/v1），统一管理云 API 模型和本地 Ollama 模型的路由与监控
+- 本地模型推理：Ollama（独立 Docker 容器，宿主机部署，Qwen3.5-9B Q4_K_M 量化约 6GB，CPU 推理）
 - 规模：个人使用，< 1000 篇文档，单用户
+
+### 上下文感知检索（多轮对话优化）
+
+- 每轮对话回答生成后，系统异步将当前 Q&A 压缩为自然语言摘要，存入 conversations 表的 summary 字段
+- 下一轮追问时，QueryRewriter 读取摘要，结合当前 query 做指代消解和查询改写
+- 摘要采用增量压缩策略：每次传入已有摘要 + 最新一轮 Q&A，LLM 生成更新后的摘要（最大 200 字）
+- 摘要长度通过配置项 `summary_max_chars` 控制，默认 200
+- 压缩在响应返回后异步执行（复用全局线程池 ZRAG_INGEST_EXECUTOR），不阻塞用户请求
+- 异步压缩失败静默降级：仅写日志，不重试，不影响下次对话。下次追问时使用旧摘要
+- 首轮对话结束后的压缩在 create 端点中触发（与 add_message 相同流程）
+
+### 本地小模型（查询改写 + 对话压缩）
+
+- 模型选型：Qwen3.5-9B，Q4_K_M 量化（约 6GB 磁盘），CPU 推理延迟约 7-11 秒/次
+- 部署方式：Ollama 独立 Docker 容器（`ollama/ollama:0.9.0`），`docker run -d --name ollama -p 11434:11434 -v ollama_data:/root/.ollama -e OLLAMA_KEEP_ALIVE=24h -e OLLAMA_HOST=0.0.0.0 --memory="10g"`。Ollama 与 LiteLLM 属于同一级别的独立基础设施，不入 ZRAG 的 docker-compose.yml，独立部署、独立升级、可被多个项目复用
+- LiteLLM Gateway 中注册 Ollama 后端：`model_name: ollama/qwen3.5:9b, api_base: http://host.docker.internal:11434`
+- 查询改写和对话压缩通过统一 LiteLLM Gateway 路由，均使用 `model=ollama/qwen3.5:9b`，与 Chat 生成的 `smart-router` 走同一个 base_url
+- Chat 生成继续走云 API 模型（smart-router），不受影响
+- BGE embedding 模型不受影响：Embedding 模型（encoder-only）与 LLM（decoder-only）架构不同，Ollama 不支持。BGE 继续通过 SentenceTransformer 进程内加载，保持零网络开销
+- 降级策略：Ollama 不可用时（容器宕机、冷启动超时），查询改写自动降级使用原始 query，回答请求不中断
+- LiteLLM 重启由运维人员手动操作，不自动执行
+
+### 新增模块：ConversationSummarizer
+
+- 职责：将多轮对话内容压缩为简洁的自然语言摘要，用于注入查询改写阶段
+- 公开接口：`summarize(old_summary, user_query, assistant_reply) → str`
+- 内部封装：Jinja2 模板渲染（compress.j2）+ LLM 调用 + 输出清理（移除废话前缀，截断到 max_chars）
+- 助手回复超过 500 字时自动截断，避免 prompt 膨胀
+- 输出清理策略：匹配并移除 "好的、"、"以下是"、"更新后的摘要："、"摘要："、"总结："、"：" 等常见前缀；模板中通过严格输出规则约束 LLM 不产生废话
+
+### 新增模块：CompressService
+
+- 职责：封装异步压缩的调度逻辑，线程池管理 + ConversationSummarizer 调用
+- 公开接口：`submit(conversation_id, old_summary, user_query, assistant_reply)` → 立即返回
+- 复用项目全局线程池（ZRAG_INGEST_EXECUTOR，默认 2 workers），不新建线程池
+- 模块级单例（DoLC 懒加载），首次调用时从 Django settings 读取 rewriter_model 和线程池配置
+- 线程安全：压缩任务创建独立的 SqliteStore 实例（WAL 模式支持并发写），不共享主请求线程的连接
+- 静默失败：压缩 LLM 调用或 DB 写入失败仅写日志，不抛异常，不重试
+
+### 修改模块：QueryRewriter
+
+- 接口扩展：`rewrite(query, summary=None)` 新增 summary 参数
+- summary 注入到 user message 中（而非 system prompt），保持 system prompt 简洁不变
+- `_render_messages()` 渲染时，若有 summary 则在 user message 前缀注入 `"对话上下文摘要：{summary}\n\n当前用户查询：{query}"`
+
+### 修改模块：Retriever
+
+- `hybrid_search()` 签名增加 `summary` 参数（默认 None），透传给 `query_rewriter.rewrite(query, summary)`
+- 查询改写调用包裹 try/except：失败时降级使用原始 query，记录 warning 日志
+
+### Prompt 模板更新
+
+- query_rewrite.j2：新增指代消解指令（引导 LLM 结合摘要解析 "它""这个" 等指代词）；同义词替换策略改为核心词提取（"实现原理"→"原理"），降低对 LLM 领域知识的依赖
+- compress.j2（新建）：压缩 prompt 模板，约束输出格式为纯文本、禁止废话前缀，支持 `max_chars` 参数注入
+
+### 数据库 Schema 变更
+
+在 conversations 表新增两个字段：
+- `summary TEXT NOT NULL DEFAULT ''` — 对话压缩摘要
+- `summary_updated_at TEXT NOT NULL DEFAULT ''` — 摘要最后更新时间
+
+新数据库直接包含新字段；旧数据库通过 `_migrate()` 方法安全追加（try/except sqlite3.OperationalError 跳过已存在列）
+
+### 配置文件变更
+
+- config/llm.yaml：在 gateway 段下新增 `rewriter_model: "${REWRITER_LLM_MODEL:-ollama/qwen3.5:9b}"`。base_url 不变（统一指向 LiteLLM Gateway），仅 model 参数不同实现路由区分
+- config/retrieval.yaml：新增 `summary_max_chars: 200`
+- .env 新增：`REWRITER_LLM_MODEL=ollama/qwen3.5:9b`
+
+### API 层
+
+- create 端点：返回 Response 前触发异步压缩（old_summary=""）
+- add_message 端点：校验后先读取 conversations.summary，传入 hybrid_search 的 summary 参数；返回前触发异步压缩
+- API 接口无变化（请求/响应格式不变），前后端 API 契约不变
 
 ### 存储层
 
@@ -117,7 +201,7 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 
 ### 检索层
 
-- **查询改写（Query Rewriting）**：`hybrid_search()` 在 embedding 和 FTS5 查询前，先通过 QueryRewriter 调用 LLM 将用户原始查询改写为结构化 JSON `{keywords, refined_query}`。`keywords` 为提炼后的关键词列表（空格分隔），直接流入 FTS5 全文检索路径（走 jieba 分词索引）；`refined_query` 为精炼后的自然语言表达，流入向量语义检索路径。改写始终执行，无跳过条件。QueryRewriter 使用 Jinja2 模板（query_rewrite.j2）构建 System Prompt
+- **查询改写（Query Rewriting）**：`hybrid_search()` 在 embedding 和 FTS5 查询前，先通过 QueryRewriter 调用本地模型将用户原始查询改写为结构化 JSON `{keywords, refined_query}`。多轮对话时，QueryRewriter 接收对话摘要用于指代消解和上下文感知。`keywords` 为提炼后的关键词列表（空格分隔），直接流入 FTS5 全文检索路径（走 jieba 分词索引）；`refined_query` 为精炼后的自然语言表达，流入向量语义检索路径。改写始终执行，无跳过条件。QueryRewriter 使用 Jinja2 模板（query_rewrite.j2）构建 System Prompt。改写失败时自动降级使用原始 query
 - 混合检索：ChromaDB similarity_search(k=k×2，默认 20) + SQLite FTS5 BM25 with jieba 分词(k=k×2，默认 20) → RRF 融合。扩大候选池后 RRF 有更充分的材料进行排序融合，最终截取 top-k（默认 10）返回，避免遗漏"只有一条路径认可"的优质结果
 - RRF 公式：`score(d) = w_vector/(k + rank_vector) + w_keyword/(k + rank_keyword)`。权重从 config/retrieval.yaml 读取，默认等权（1.0/1.0），可按语料特征和场景调整偏向
 - 结果按 RRF 分数排序，通过排序融合自然去重
@@ -129,10 +213,10 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 ### LLM Provider
 
 - LLMProvider 抽象基类：chat(messages) → str、chat_stream(messages) → Iterator[str]（Phase 2）
-- LLMGatewayProvider：通过 OpenAI SDK 调用 LiteLLM Gateway
+- LLMGatewayProvider：通过 OpenAI SDK 调用 LiteLLM Gateway。内部代码不变，仅调用方根据用途传入不同的 model 参数（`smart-router` 用于 Chat 生成，`ollama/qwen3.5:9b` 用于查询改写和压缩）
 - 错误处理策略：有回调 → 通知回调 + 不抛异常；无回调 → 抛 BaseZragException
-- 超时时间：200 秒
-- 可用模型（通过 LiteLLM Gateway 配置）：smart-router（负载均衡组）、glm-5、kimi-k2.6、deepseek-v4-flash、minimax-m2.7、deepseek-v4-pro
+- 超时时间：200 秒（Chat 生成）、120 秒（查询改写/压缩）
+- 可用模型（通过 LiteLLM Gateway 配置）：smart-router（云 API 负载均衡组）、ollama/qwen3.5:9b（本地 Ollama）
 
 ### API 层
 
@@ -150,8 +234,8 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 
 | 端点 | 方法 | 说明 |
 |------|:--:|------|
-| POST /v1/conversations | POST | 新建会话 + 首条问答 |
-| POST /v1/conversations/{id}/messages | POST | 在已有会话中继续问答 |
+| POST /v1/conversations | POST | 新建会话 + 首条问答（含异步压缩） |
+| POST /v1/conversations/{id}/messages | POST | 在已有会话中继续问答（读摘要→改写→检索→异步压缩） |
 | GET /v1/conversations | GET | 会话列表（含 total 总数，按最近消息倒序） |
 | GET /v1/conversations/{id}/messages | GET | 获取某会话的全部消息 |
 | DELETE /v1/conversations/{id} | DELETE | 删除会话及消息（幂等） |
@@ -188,7 +272,7 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 
 ### 会话存储
 
-- conversations 表：id、title、created_at
+- conversations 表：id、title、summary、summary_updated_at、created_at
 - messages 表：id、conversation_id、role(user|assistant)、content、sources(JSON)、created_at
 - 无 updated_at 字段（通过子查询获取最新消息时间），不存模型名
 - 删除级联：同事务中 DELETE messages → DELETE conversations
@@ -197,7 +281,8 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 ### 配置管理
 
 - config/ 目录下按模块分文件：llm.yaml、embedding.yaml、ingest.yaml、api.yaml、storage.yaml、retrieval.yaml
-  - retrieval.yaml 新增检索相关配置项：
+  - llm.yaml gateway 段新增 rewriter_model 字段，指向本地模型
+  - retrieval.yaml 新增检索和摘要相关配置项：
     ```yaml
     retrieval:
       top_k: 10
@@ -205,6 +290,7 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
       rrf_weights:
         vector: 1.0
         keyword: 1.0
+      summary_max_chars: 200
     ```
 - 动态合并加载器：排序 glob -> 合并嵌套键 -> 解析环境变量 ${VAR} -> 环境变量覆盖
 - 配置加载三阶段流程：
@@ -218,15 +304,16 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 
 ### 部署
 
-- 三容器方案：Nginx（反向代理 + gzip）+ Frontend（nginx:alpine + dist/）+ Backend（uWSGI + Django）
+- 四容器方案：Nginx（反向代理 + gzip）+ Frontend（nginx:alpine + dist/）+ Backend（uWSGI + Django）+ LiteLLM Gateway
+- Ollama 独立容器部署（不入 docker-compose.yml），与 LiteLLM 同级基础设施
 - Nginx：宿主机 80 端口，独立部署（`nginx.sh start`），非 docker-compose 管理
 - Frontend：内部 80 端口，仅 expose
 - Backend：内部 5965 端口，仅 expose
 - 数据持久化：./data/pro:/app/data（zrag.db + chroma_db + django.db）
-- 模型挂载：/Users/lichen/Documents/workspace/models:/app/models:ro（只读，绝对路径）
+- 模型挂载：/Users/lichen/Documents/workspace/models:/app/models:ro（只读，绝对路径，仅 BGE 用）
 - 日志持久化：./logs/pro:/app/log（业务日志）
 - 环境变量：.env 文件 + docker-compose ${VAR} 引用
-- entrypoint.sh：migrate → collectstatic → uwsgi（建表由 AppConfig.ready() 自动执行 `CREATE TABLE IF NOT EXISTS`）
+- entrypoint.sh：migrate → collectstatic → uwsgi（建表由 AppConfig.ready() 自动执行 `CREATE TABLE IF NOT EXISTS`，Column migration 由 SqliteStore._migrate() 执行）
 - 健康检查：Frontend（curl /）、Backend（curl /v1/health/live）
 - 资源限制：Backend 512M/2CPU，Frontend 64M/0.5CPU，Nginx 64M/0.5CPU
 - 日志轮转：json-file driver，10MB × 3 文件
@@ -242,7 +329,7 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 CREATE TABLE chunks (chunk_id TEXT PK, source_id TEXT, source_type TEXT, doc_title TEXT, content TEXT, chunk_index INTEGER, created_at TEXT);
 CREATE VIRTUAL TABLE chunks_fts USING fts5(content, content=chunks, content_rowid=rowid);
 CREATE TABLE processed_docs (source_id TEXT PK, source_type TEXT, content_hash TEXT, imported_at TEXT);
-CREATE TABLE conversations (id TEXT PK, title TEXT, created_at TEXT);
+CREATE TABLE conversations (id TEXT PK, title TEXT, summary TEXT NOT NULL DEFAULT '', summary_updated_at TEXT NOT NULL DEFAULT '', created_at TEXT);
 CREATE TABLE messages (id TEXT PK, conversation_id TEXT FK, role TEXT, content TEXT, sources TEXT, created_at TEXT);
 CREATE TABLE ingest_tasks (id TEXT PK, task_type TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', total INTEGER DEFAULT 0, processed INTEGER DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')));
 ```
@@ -254,9 +341,19 @@ CREATE TABLE ingest_tasks (id TEXT PK, task_type TEXT NOT NULL, status TEXT NOT 
 - 每个模块的公共接口应可独立测试
 - 存储测试使用真实 SQLite（内存或临时文件），不使用 mock
 - 向量测试使用真实 ChromaDB（临时目录）
-- 仅 mock 外部依赖（LiteLLM Gateway、macOS AppleScript）
+- 仅 mock 外部依赖（LiteLLM Gateway 返回的 LLM 调用、macOS AppleScript）
 
-### 待测试模块
+### 本次新增/修改的测试
+
+| 模块 | 测试重点 |
+|------|---------|
+| ConversationSummarizer（新） | summarize 首轮/增量压缩正确性、_clean_summary 废话前缀移除、max_chars 截断、助手回复截断、输出为纯文本非 JSON |
+| CompressService（新） | submit 后摘要写入 DB、LLM 调用失败静默不抛异常、并发提交不出现竞态崩溃 |
+| QueryRewriter（修改） | 传入 summary 时 user message 包含摘要、不传 summary 时 user message 仅为 query、LLM 结合摘要解析指代、核心词提取策略 |
+| Retriever（修改） | QueryRewriter 调用失败时降级使用原始 query |
+| 集成测试 | 模拟 3 轮对话，验证摘要逐轮更新、改写使用正确摘要 |
+
+### 已有测试覆盖（不变）
 
 | 模块 | 测试重点 |
 |------|---------|
@@ -272,7 +369,6 @@ CREATE TABLE ingest_tasks (id TEXT PK, task_type TEXT NOT NULL, status TEXT NOT 
 | HTML→Markdown 转换 | 12 种标签转换正确性、base64 图片移除、实体解码、空白整理 |
 | FTS5 jieba 分词 | 中文分词正确性、中英混合文本处理、写入/查询一致性 |
 | 检索 Retriever | hybrid_search 去重结果、RRF 评分正确性、空结果处理、查询改写分流正确性、k×2 候选池截断、RRF 权重计算 |
-| 检索 QueryRewriter | LLM 改写 JSON 解析、异常降级处理 |
 | 检索 PromptBuilder | build() 输出结构、上下文截断、来源格式化 |
 | API 全部端点 | 请求/响应校验、认证检查、速率限制、错误响应、404 处理 |
 | 会话 API | create/list/get/delete 流程、不存在对话 404、DELETE 幂等、LLM 失败回滚 |
@@ -284,6 +380,9 @@ CREATE TABLE ingest_tasks (id TEXT PK, task_type TEXT NOT NULL, status TEXT NOT 
 - Django test client：API 集成测试
 - Vitest + @vue/test-utils + happy-dom：Vue 组件测试 + 纯逻辑测试
 
+### 测试前准备
+- 仅清空会话相关表（conversations、messages），chunks、chunks_fts 及 ChromaDB 向量库数据必须保持不动
+
 ## 不在范围内
 
 - 多用户支持（仅单用户）
@@ -294,17 +393,22 @@ CREATE TABLE ingest_tasks (id TEXT PK, task_type TEXT NOT NULL, status TEXT NOT 
 - 源管理页实时进度通过 SSE
 - 数据备份功能
 - PDF/DOCX/TXT 文件源（先做 MacNotesSource，后续扩展）
-- Ollama 本地模型支持（LiteLLM Gateway 统一管理模型路由）
 - ReRanker 重排序（<1K 文档量级暂无需求）
+- 本地模型切换 API 或 UI（模型通过配置文件指定，不运行时切换）
+- 全量历史对话压缩（仅做增量压缩，不做定期全量重建）
+- GPU 推理（当前 CPU 推理满足需求，未来可切换到 vLLM 仅改 LiteLLM Gateway 配置）
 
 ## 补充说明
 
 - 参考项目：zonebank（DRF 模式、异常处理、uWSGI 配置）
 - LiteLLM Gateway 配置位于 ~/.claude/litellm/config.yaml，已配置 smart-router 负载均衡
+- LiteLLM Gateway 配置中新增 `ollama/qwen3.5:9b` 模型指向本地 Ollama（api_base: http://host.docker.internal:11434）
+- Ollama 独立 Docker 容器部署（docker run），模型文件约 6GB 持久化在 ollama_data volume 中。更换电脑时拷贝 volume 数据即可
 - 整个项目在同一 Git 仓库中（zrag/ 后端 + frontend/ 前端）
-- 全部模块设计方案及各模块代码片段记录于 docs/QA.md（Q0-Q35）
+- 全部模块设计方案及各模块代码片段记录于 docs/QA/（Q0-Q35）
 - 全程无 LangChain/LlamaIndex/FastAPI/手写 BM25/Jinja2 服务端渲染
-- Prompt 模板引擎：Jinja2（zrag/prompts/chat_system.j2），支持条件渲染和格式化
+- Prompt 模板引擎：Jinja2（zrag/prompts/ 目录），支持条件渲染和格式化
 - 混合检索准确度优化设计讨论记录于 docs/QA/hybrid-search-accuracy.md
 - 中文分词方案采用 jieba（纯 Python 实现，轻量无外部服务依赖）
-- RAG 回答质量优化设计讨论记录于 docs/QA/rag-quality-optimization.md（Q1-Q14），设计细节已写入 docs/design.md 相应章节
+- RAG 回答质量优化设计讨论记录于 docs/QA/rag-quality-optimization.md
+- 多轮对话优化（指代消解、上下文感知检索、本地小模型部署）设计细节记录于 docs/QA/rag-quality-optimization.md Q16-Q20

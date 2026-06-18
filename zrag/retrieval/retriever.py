@@ -73,7 +73,7 @@ class Retriever:
         self.w_vector = float(w.get('vector', 1.0))
         self.w_keyword = float(w.get('keyword', 1.0))
 
-    def hybrid_search(self, query: str, k: int = 10) -> list[SearchResult]:
+    def hybrid_search(self, query: str, k: int = 10, summary: str | None = None) -> list[SearchResult]:
         """混合检索: ChromaDB 向量检索 + SQLite FTS5 关键词检索 -> RRF 融合
 
         1. embedder.embed_query(query) 获取查询向量
@@ -86,16 +86,31 @@ class Retriever:
         @type  query: str
         @param k: 返回结果的最大数量, defaults to 10
         @type  k: int, optional
+        @param summary: 可选的文档摘要, 用于辅助查询改写
+        @type  summary: str | None, optional
 
         @return: 按 RRF 融合分数降序排列的检索结果列表,
                  每个结果包含 chunk_id / content / doc_title / source_id / source_type / score
         @type:   list[SearchResult]
         """
+        if summary is not None:
+            logger.debug("hybrid_search with summary (len=%d)", len(summary))
+
         if self.query_rewriter is not None:
-            rewritten = self.query_rewriter.rewrite(query)
-            fts5_query = rewritten['keywords']
-            vector_query = rewritten['refined_query']
+            try:
+                rewritten = self.query_rewriter.rewrite(query, summary)
+                fts5_query = rewritten['keywords']
+                vector_query = rewritten['refined_query']
+                logger.info(
+                    "QueryRewriter 改写成功: fts5_query=%s vector_query=%s",
+                    fts5_query, vector_query,
+                )
+            except Exception:
+                logger.warning("QueryRewriter 调用失败，降级为原始 query")
+                fts5_query = query
+                vector_query = query
         else:
+            logger.debug("QueryRewriter 未配置，跳过查询改写")
             fts5_query = query
             vector_query = query
 

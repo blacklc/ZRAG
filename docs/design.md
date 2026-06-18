@@ -44,6 +44,12 @@
 
 [6.2 PromptBuilder（Jinja2 模板渲染）](#62-promptbuilderjinja2-模板渲染)
 
+[6.3 QueryRewriter（查询改写与上下文感知）](#63-queryrewriter查询改写与上下文感知)
+
+[6.4 ConversationSummarizer（对话压缩）](#64-conversationsummarizer对话压缩)
+
+[6.5 CompressService（异步压缩调度）](#65-compressservice异步压缩调度)
+
 [7. LLM 集成](#7-llm-集成)
 
 [8. API 设计](#8-api-设计)
@@ -457,9 +463,11 @@ POST /v1/conversations  {"query": "什么是装饰器？"}
 
 ```sql
 CREATE TABLE conversations (
-    id         TEXT PRIMARY KEY,  -- UUID
-    title      TEXT NOT NULL,      -- 首条 query 前 50 字符
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    id              TEXT PRIMARY KEY,  -- UUID
+    title           TEXT NOT NULL,      -- 首条 query 前 50 字符
+    summary         TEXT NOT NULL DEFAULT '',          -- 对话压缩摘要（自然语言文本）
+    summary_updated_at TEXT NOT NULL DEFAULT '',       -- 摘要最后更新时间
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE messages (
@@ -490,6 +498,20 @@ CREATE INDEX idx_messages_created ON messages(conversation_id, created_at);
 - 删除会话采用级联策略：同一事务中 DELETE messages → DELETE conversations
 - 会话列表按最近消息时间倒序排列（通过子查询获取 last_msg_at）
 - 删除操作幂等：会话不存在时仍返回成功
+
+### 对话摘要与上下文感知检索
+
+**为何需要对话摘要**。当前系统的多轮对话中，检索阶段（QueryRewriter 和 hybrid_search）完全不感知对话上下文。用户追问 "那它的性能怎么样？" 时，QueryRewriter 收到的只有这句不完整的追问，"它" 无法被解析为前一问的核心实体（如 "Kubernetes 默认调度器"）。更隐蔽的问题出现在追问内容由上一轮 assistant 回复引入的场景中——如用户问 "打分具体是怎么做的"，"打分" 这个词在用户历史查询序列中从未出现，而是在上一轮 assistant 回复中首次提及。这种问题在信息检索领域被称为上下文缺失查询，即查询语句本身不含足够的信息来判断用户的真实意图，必须结合前文上下文才能理解。解决方式是引入对话摘要机制——系统在每轮对话结束后将 Q&A 压缩为一段简洁的自然语言摘要，下一轮追问时将摘要注入 QueryRewriter 的输入中，使改写模型能够理解 "当前在讨论什么"。
+
+**为何采用增量压缩**。将多轮对话压缩为摘要有两种策略：全量压缩（传入全部历史 Q&A 重新生成摘要）和增量压缩（传入已有摘要 + 最新一轮 Q&A）。ZRAG 选择增量压缩。全量压缩的问题在于，随着对话轮数增长，输入 prompt 会线性膨胀——第 10 轮对话的压缩需要传入前 9 轮的所有 Q&A 文本，对本地 9B 模型而言 prompt 可能超过 5000 字符，推理延迟显著增加。增量压缩则将输入限定为已有摘要（最多 200 字）+ 最新一轮 Q&A（截断到 500 字），输入长度恒定。此外，增量压缩天然实现了信息衰减——早期对话内容在反复重压缩中被逐步泛化，第 1 轮的详细讨论在第 8 轮后可能退化为一个简述词，这种衰减与人类对话中话题漂移的认知模式一致。不需要显式限制对话轮次，200 字的硬上限迫使 LLM 自行取舍优先级，更重要、更新的话题会自然挤掉旧话题。
+
+**为何摘要存储在 conversations 表中**。一个会话只有一个摘要，是一对一关系。摘要跟随 conversations 记录的创建而初始化（空字符串），跟随对话的进行而被逐轮更新。会话删除时摘要自动级联清理，无需额外维护。`summary_updated_at` 字段记录最后一次摘要更新时间，用于运维阶段判断摘要是否因异步压缩失败而长期未更新（即降级状态持续时长）。
+
+**为何摘要也要注入 LLM 生成阶段**。摘要最初仅设计用于查询改写阶段（QueryRewriter）。但分析发现，LLM 生成阶段同样面临长对话的信息截断问题——SQL 查询 `LIMIT 10` 意味着超过 10 轮后，第 1 轮到第 6 轮的消息被丢弃，LLM 无法感知早期对话内容。而摘要通过增量压缩保存了从第 1 轮开始的完整上下文（压缩在 200 字内），即使在长对话中也始终可用。将摘要注入 `full_messages` 后，即使历史消息只剩最近几轮，LLM 仍能从摘要中了解更早的对话背景。
+
+**摘要注入位置为何放在 rag system prompt 之后**。`full_messages` 的消息顺序经过了仔细考量。摘要作为第 2 条 system 消息（位于 rag system prompt 之后、历史消息之前），而非放在最前面。理由：rag system prompt 定义了 LLM 的角色、回答规则和对参考材料的使用方式——这是最高优先级的指导信息，必须放在最前面。摘要作为补充上下文紧跟其后，语义位置自然——LLM 先拿到 "你是知识库助手，参考材料如下"，再了解 "之前讨论了什么"，最后读到历史消息和当前问题。如果反过来把摘要放在最前面，LLM 先看到的是一段没头没尾的对话背景，角色认知和回答规则到后面才出现，优先级被稀释。此外，摘要是独立的 system 消息而非混入 rag system prompt 中——避免与参考材料混在一起导致 LLM 难以区分"系统角色指令"、"背景知识"和"参考文档"三种不同信息源。
+
+**为何缩减历史消息数量**。既然摘要提供了完整上下文，历史消息只需保留最近几轮以保证口语连贯性即可。`LIMIT` 从 10 缩减为 3（约 1.5 轮 Q&A）。缩减历史消息减少了 prompt token 消耗，对于对话较长时的 API 模型消费有直接收益。同时，摘要承担了"长期记忆"的职责，历史消息退化为"短期语流连贯"，职责分离清晰。
 
 ---
 
@@ -1736,6 +1758,240 @@ def build_rag_prompt(query: str, results: list) -> list[dict]:
 4. **Jinja2 空白控制**：通过 `{%-` 和 `-%}` 去除模板标签产生的多余空行，保证渲染输出的整洁性
 5. **模块级 Environment 单例**：`_env` 在模块加载时创建并缓存，后续每次 `build_rag_prompt` 调用复用同一个 `Environment` 实例，避免重复解析模板文件
 
+## 6.3 QueryRewriter（查询改写与上下文感知）
+
+QueryRewriter 在检索之前执行一次轻量 LLM 调用，将用户的口语化问题改写为两个互补产出物——**关键词列表**（空格分隔，传入 FTS5 做关键词检索）和**精炼自然语言查询**（传入 `embed_query()` 做语义向量检索）——使两条检索路径各自获得适配其特性的输入。
+
+多轮对话场景下，QueryRewriter 接收对话摘要（`summary` 参数），结合摘要进行指代消解（将 "它""这个" 解析为具体实体）和上下文感知改写，使检索结果始终针对当前的对话上下文。
+
+查询改写通过 Jinja2 模板（`zrag/prompts/query_rewrite.j2`）引导 LLM 完成，LLM 返回结构化 JSON `{"keywords": "...", "refined_query": "..."}`。QueryRewriter 通过依赖注入传入 Retriever，与 LLM Provider 解耦。输出格式需去除可能包裹的 markdown 代码块（` ```json ` 标记），JSON 解析失败或任何 LLM 调用异常时降级返回原始查询，不阻断检索主流程。
+
+### 设计理念
+
+**为何需要查询改写**。用户日常输入的自然语言问题往往带有口语化特征——简称、省略、非正式表达（如"怎么让 Python 跑得更快"而非"Python 程序性能优化方法"）。如果直接将原始查询原样传入向量检索和关键词检索，检索系统面对的是非标准化的表达，召回质量受用户措辞习惯影响很大。查询改写将口语化输入标准化——关键词列表专为 FTS5 精确匹配而提炼，精炼查询专为向量语义检索而规范化。
+
+**为何全部查询都执行改写**。查询改写的替代方案是先对查询做复杂度判断（例如通过规则或分类器）——对简单查询跳过改写直接检索，对复杂查询才执行改写。这种方案在意图上是为了节省改写开销，但在实践中引入了一个新的故障模式：复杂度判断本身可能出错——一个看似简单的查询可能恰好因为措辞差异导致关键文档无法被检索到。此外，复杂度判断增加了代码路径的分支，使系统行为在不同查询上不一致，增大了调试和问题复现的难度。对全部查询执行改写使得系统行为统一可预测，改写的 LLM 调用延迟（约 0.5-1 秒）在 RAG 问答的整体耗时（检索 + LLM 生成，通常 5-20 秒）中占比有限，换取的输入质量提升是确定性的。
+
+**为何对 keywords 输出做 FTS5 直传而非再分词**。LLM 输出的 keywords 是经过语义边界拆分后的搜索词（如 `Kubernetes 默认调度器 工作原理`），每个词已经是一个完整的语义单元。如果将 keywords 再经 jieba 分词拆分，可能会破坏 LLM 已完成的语义提炼——例如 LLM 输出的 `默认调度器` 是一个精确的技术术语，jieba 可能将其拆为 `默认` + `调度器` 两个独立 token。目前 `search_fts5()` 仍对 keywords 执行 jieba 分词——因为 FTS5 索引时已用 jieba 对 chunk content 做过分词，保持写入端和查询端的分词粒度一致是必要的。但 LLM 已承担了"提取核心语义单元"的职责，jpba 在此处的作用主要是做最后的 token 清洗和格式化，而非重新切分语义结构。
+
+**为何采用"替换"而非"追加"同义词策略**。Keywords 中生成的搜索词，经 jieba 分词后多个 token 以空格连接后传入 FTS5 MATCH。SQLite FTS5 对空格分隔的 barewords 使用隐式 AND 语义——文档必须同时包含所有 token 才算命中。这意味着在 keywords 中追加同义词 token 会收紧而非放宽匹配约束。
+
+以真实案例说明：用户查询「详细讲解Kubernetes默认调度器的实现原理」，若 LLM 将 keywords 同时包含用户原始术语和文档侧替代表述，输出 `Kubernetes 默认调度器 实现原理 工作原理`。经 jieba 分词后为 `Kubernetes 默认 调度器 实现 原理 工作`（FTS5 隐式 AND）。文档章节标题「工作原理」（分词后 `工作 原理`）包含了 `工作` 和 `原理`，但缺少 `实现`；另一 chunk「pod调度的实现原理」（分词后 `实现 原理`）包含了 `实现` 和 `原理`，但缺少 `工作`。结果两条 chunk 都因缺少其中一个 AND 项而双双落选——追加同义词反而让原本能命中的 chunk 也无法命中。
+
+因此，LLM 在生成 keywords 时需执行的是**替换**而非追加——将用户查询中口语化或特定化术语替换为文档侧更常见的同义表达。例如「实现原理」替换为「工作原理」，使 FTS5 查询变为 `Kubernetes 默认 调度器 工作 原理`，从而命中标题为「工作原理」的章节 chunk。替换策略通过 `query_rewrite.j2` 模板中的指令实现——模板中新增同义词替换规则，引导 LLM 在提炼关键词时主动识别并替换用户术语为文档侧更常见的表达，关键词总数保持在 5 个以内，不无意义扩充。
+
+> 注意：替换策略依赖于 LLM 的语义理解能力来识别同义/近义表达。对于需要多个同义词覆盖不同文档措辞的场景（如文档中既使用了「实现原理」也使用了「工作原理」），当前 AND 语义下无法用单一 keywords 字符串同时覆盖。这类场景需未来升级 FTS5 OR 语法支持或实现多路 FTS5 查询——这些扩展涉及 `sqlite_store.py` 的代码改动，当前阶段仅通过模板指令优化来提升改写质量。
+
+**为何 refined_query 不做同义词替换**。Refined_query 传入 `embed_query()` 后走向量语义检索路径，Embedding 模型对同义表达具有天然的语义容忍度——「实现原理」和「工作原理」在 BGE 模型的向量空间中距离相近，即使不替换也能召回语义相关的 chunk。因此同义词替换策略仅应用于 keywords（FTS5 精确匹配路径），refined_query 保持原样以保证语义检索覆盖面的完整性。
+
+**为何同义词扩展仅通过模板指令实现而不引入词库**。引入配置化的领域同义词映射表（如 `synonyms.yaml`，将「实现原理」映射到 `[工作原理, 设计原理, 算法原理]`）在工程上是更精确的方案——不依赖 LLM 的语义理解能力，映射是确定性的。但这种方案引入了一个新的需要维护的数据资产（词库文件），且词库的覆盖度随着文档领域变化需要持续更新。对于 ZRAG 的个人使用规模，通过 LLM 模板指令实现同义词替换已能满足当前需求——LLM 在生成 kewords 时具备上下文语义理解能力，可以根据具体的查询语境选择最优替换词，无需预定义映射表。模板指令方案的维护成本为零——修改模板中的规则措辞或示例即可调整行为，不需要额外维护数据文件或代码逻辑。
+
+**为何引入上下文感知改写**。当前 QueryRewriter 仅接收当前 query，在多轮对话中不感知上下文。这导致两个问题。其一是指代消解——追问 "那它的性能怎么样？" 时，"它" 无法被解析为前一问的实体。其二是上下文缺失——追问 "打分怎么做的" 中的 "打分" 由上一轮 assistant 回复首次引入，用户历史查询序列中从未出现这个词。在多轮对话中，用户的后继查询高度依赖前文提供的信息背景，检索系统如果不能理解这个背景，就会在模糊查询上产生偏题检索结果。解决方式是将对话摘要注入 QueryRewriter——`rewrite()` 方法新增 `summary` 参数，Summary 为 null 时保持原有行为（向后兼容），Summary 不为 null 时将摘要文本注入 user message 前缀（格式为 `"对话上下文摘要：{summary}\n\n当前用户查询：{query}"`），引导 LLM 结合上下文做指代消解和改写。
+
+**为何摘要注入在 user message 而非 system prompt**。System prompt 在 QueryRewriter 中用于定义角色和输出格式约束，是固定的模板内容。摘要（上下文信息）是动态数据，随着每轮对话更新。将摘要注入 user message 而非 system prompt 有两层考虑。第一，保持 system prompt 简洁稳定——system prompt 变更后需要重新评估 LLM 对角色指令的遵循程度，而 user message 的变更是预期中的动态输入，LLM 更容易适应。第二，语义位置——将摘要与当前 query 放在一起（`摘要\n\n当前查询`）让 LLM 自然地理解 "先有上下文、后有当前问题" 的信息结构，这是人类处理追问时的信息组织方式。
+
+**为何同义词替换改为核心词提取**。之前的同义词替换策略（"实现原理"→"工作原理"）经过验证，LLM 未能遵循指令。根因在于 LLM 无法从自身训练数据中预测特定文档库实际使用的术语——"实现原理" 是有效的技术术语，LLM 没有任何依据将其替换为 "工作原理"。即使模板中给出了明确示例，LLM 仍然以自身知识为最高优先级来完成 "改写成更精准表达" 这个任务。这是一个根本性的局限——术语映射需要领域知识，而 LLM 的领域知识无法覆盖用户的私有文档库。修正方案是将指令从 "使用技术文档中更常见的同义表达" 改为 "只保留最核心的名词，去掉修饰性前缀"——例如 "实现原理" 提取为 "原理"。"核心词提取" 策略的核心优势在于降低了任务对 LLM 领域知识的依赖——LLM 不需要知道文档中实际使用的术语是什么，只需识别并剥离复合词中的修饰成分。这是一项纯语言学任务，不涉及任何领域知识，7B-9B 级别的模型完全胜任。模板中对应指令更新为：`对于复合概念术语，只保留最核心的名词，去掉修饰性前缀。例如 "实现原理" 提取为 "原理"。`
+
+### 核心实现
+
+模板文件 `zrag/prompts/query_rewrite.j2` 作为 system prompt 发送给 LLM：
+
+```
+你是一个查询优化助手。你的任务是将用户的日常口语化查询改写为更适合检索的结构化格式。
+
+任务说明:
+1. 从用户查询中提取核心关键词，用空格分隔，用于全文检索
+2. 将用户查询精炼改写为简洁、规范的自然语言查询，用于语义检索
+3. 如果用户查询中包含指代词（如"它"、"这个"、"上面提到的"等），
+   请结合提供的对话上下文摘要，将指代词替换为具体的概念或实体。
+   例如：上下文摘要提到"Kubernetes默认调度器"，
+   用户问"它的性能怎么样"，应将"它"替换为"Kubernetes默认调度器"。
+4. 关键词提取时注意：对于复合概念术语，只保留最核心的名词，去掉修饰性前缀。
+   例如 "实现原理" 提取为 "原理"。
+   关键词总数保持在 5 个以内，不要无意义扩充。
+5. 输出必须是纯 JSON 格式，不要使用 markdown 代码块包裹
+
+示例:
+用户查询: "怎么在k8s里配自动伸缩啊"
+输出: {"keywords": "Kubernetes 自动伸缩 配置", "refined_query": "如何在 Kubernetes 中配置自动伸缩"}
+
+用户查询: "详细讲解Kubernetes默认调度器的实现原理"
+输出: {"keywords": "Kubernetes 默认调度器 原理", "refined_query": "详细讲解 Kubernetes 默认调度器的实现原理"}
+```
+
+QueryRewriter 类的核心逻辑：
+
+```python
+class QueryRewriter:
+    """查询改写器
+    
+    通过 Jinja2 模板构建 system prompt, 引导 LLM 将口语化查询改写为
+    结构化 JSON {keywords, refined_query}。
+    解析失败时降级返回原始查询, 不阻断检索主流程。
+    
+    @param llm_provider: LLM Provider 实例, 需实现 chat(messages) -> str | None
+    @param prompts_dir:  Prompt 模板目录路径
+    """
+
+    def rewrite(self, query: str, summary: str | None = None) -> dict[str, str]:
+        """改写用户查询，结合对话摘要进行指代消解和上下文感知改写
+
+        @param query:   用户输入的原始口语化查询
+        @param summary: 对话上下文摘要，null 表示首轮对话，此时行为与旧版一致（向后兼容）
+        @return: {"keywords": "...", "refined_query": "..."}
+                 异常时降级: {"keywords": query, "refined_query": query}
+        """
+        # 构建消息: system 放指令, user 放查询（如有摘要则注入为前缀）
+        system_prompt = self._template.render()
+        user_content = query
+        if summary:
+            user_content = f"对话上下文摘要：{summary}\n\n当前用户查询：{query}"
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+
+        response = self._llm.chat(messages)
+        if response is None:
+            logger.warning("LLM chat returned None, falling back to original query")
+            return {"keywords": query, "refined_query": query}
+
+        return self._parse_response(response, query)
+
+    def _parse_response(self, response: str, query: str) -> dict[str, str]:
+        """解析 LLM 返回的 JSON, 去除可能包裹的 markdown 代码块
+        
+        解析成功后记录改写结果日志, 缺失字段或解析失败时降级返回原始查询。
+        """
+```
+
+### 设计特点总结
+
+1. **改写与检索解耦**：QueryRewriter 通过依赖注入传入 Retriever，改写逻辑不嵌入检索流程，便于独立测试和替换
+2. **模板驱动改写**：改写规则和示例集中在 `query_rewrite.j2` 模板中，修改改写策略无需改动 Python 代码
+3. **同义词替换策略**：针对 FTS5 隐式 AND 语义，LLM 输出关键词时执行术语替换（而非追加），避免同义词扩充导致 AND 约束加严
+4. **双路差异化输入**：keywords 走 FTS5 精确匹配路径（可替换用户术语），refined_query 走向量语义检索路径（保留语义完整性），各取所长
+5. **降级不阻断**：LLM 调用失败、返回 None、JSON 解析失败等所有异常场景下静默降级为使用原始查询，不影响检索主流程的正常运行
+6. **上下文感知改写**：多轮对话中通过 `summary` 参数注入对话摘要，LLM 结合上下文解析指代并精炼查询。摘要为 null 时向后兼容，首轮对话行为不变
+7. **核心词提取取代同义词替换**：从 "替换为文档侧术语" 改为 "剥离修饰性前缀只保留核心名词"，降低对 LLM 领域知识的依赖，依赖纯粹的语言学能力
+
+## 6.4 ConversationSummarizer（对话压缩）
+
+ConversationSummarizer 将多轮对话中的每轮 Q&A 压缩为简洁的自然语言摘要，摘要注入 QueryRewriter 后用于上下文感知检索。它与 QueryRewriter 共享同一个本地 LLM 后端，但职责独立——压缩和改写是两种不同的语言任务，各自有独立的 prompt 模板（`compress.j2` 和 `query_rewrite.j2`）和错误处理策略。
+
+### 设计理念
+
+**为何压缩与改写分属不同的类**。压缩和改写虽然都调用 LLM，但任务性质不同：改写需要输出结构化 JSON（`{keywords, refined_query}`），对输出格式有严格约束；压缩输出纯文本（自然语言摘要），清理前缀后即可使用。两者的 prompt 模板独立迭代——调整压缩策略（如改变摘要粒度或长度限制）不应影响改写模板，反之亦然。此外，压缩在请求响应后异步执行，改写紧跟查询请求同步执行——两个调用在时间线上分离，属于不同的调用上下文。将两者分离为独立的类使得各自的 mock 测试和错误处理互不干扰。
+
+**为何采用增量压缩**。增量压缩每次传入已有摘要 + 最新一轮 Q&A（助手回复截断到 500 字符），LLM 输出更新后的摘要（最大 200 字）。这种策略下输入长度恒定，不随对话轮数增加而膨胀。全量压缩（每次传入全部历史 Q&A）在第 10 轮对话时 prompt 可能超过 5000 字符，对本地 9B 模型的推理延迟是显著负担。增量压缩的另一优势是信息自然衰减——早期对话内容在反复重压缩中被逐步泛化，第 1 轮的详细讨论在第 8 轮后可能退化为一个简述词，这种衰减与人类对话中话题漂移的认知模式一致。200 字的硬上限迫使 LLM 自行取舍优先级，不需要显式限制对话轮次。
+
+**为何对摘要输出做清理**。本地小模型（7B-9B 级别）的指令跟随能力不如 API 模型（IFEval 91.5 分表示仍有约 8.5% 概率未能完美遵循指令）。常见的不良输出模式包括在摘要前添加前缀词（"好的，对话摘要如下"、"更新后的摘要："）。虽然在 prompt 中通过严格输出规则（"你只能输出摘要文本本身，禁止输出任何其他内容"）作为第一道防线约束 LLM，但 9B 模型的不完全确定性使得这道防线不能做到 100% 可靠。因此 `ConversationSummarizer._clean_summary()` 作为第二道防线，匹配并移除常见废话前缀（"好的，"、"以下是"、"更新后的摘要："、"摘要："、"总结："、"："），并截断到 `max_chars`。两道防线比单靠 prompt 更可靠。
+
+**为何助手回复截断到 500 字符**。LLM 生成的完整回答可能超过 2000 字符，但摘要不需要所有细节。500 字符足够覆盖回答中的核心论点和关键实体。过度截断可能导致摘要丢失重要上下文（如回答中后半部分引入的新概念），截断不足则让 prompt 膨胀。500 字符是基于本地 9B 模型典型输出风格和 ZRAG 问答场景的经验值。
+
+### 核心实现
+
+模板文件 `zrag/prompts/compress.j2` 作为 system prompt：
+
+```
+你是一个对话摘要助手。请根据已有的对话摘要和最新一轮的问答内容，生成更新后的对话摘要。
+
+摘要要求:
+1. 用一段自然语言概括对话主题、用户关注的核心概念以及已讨论过的具体问题
+2. 摘要长度不超过{{ max_chars }}字
+3. 如果已有摘要为空，说明这是首轮对话，只概括本轮内容即可
+4. 如果已有摘要不为空，需要将本轮新内容融入已有摘要中，保持摘要的整体连贯
+
+严格输出规则:
+- 你只能输出摘要文本本身，禁止输出任何其他内容
+- 禁止添加"好的"、"以下是"、"更新后的摘要"、"总结："等任何前缀文字
+- 禁止添加解释、评价或补充说明
+- 违反此规则将导致摘要无法被系统处理
+```
+
+User message 格式为 `已有摘要：{summary 或 "（首轮对话，无已有摘要）"}\n\n最新一轮对话：\n用户提问：{user_query}\n助手回答：{assistant_reply[:500]}`。
+
+ConversationSummarizer 核心接口：
+
+```python
+class ConversationSummarizer:
+    """对话摘要压缩器
+
+    将多轮对话内容压缩为简洁的自然语言摘要，用于注入查询改写阶段。
+    采用增量压缩策略：每次传入已有摘要 + 最新一轮 Q&A，生成更新后的摘要。
+    """
+
+    _MAX_REPLY_CHARS = 500  # 助手回复截断长度
+
+    def __init__(self, llm_provider, template_dir=None, max_chars=200):
+        ...
+
+    def summarize(self, old_summary: str, user_query: str, assistant_reply: str) -> str:
+        """生成更新后的对话摘要
+
+        @param old_summary:     已有摘要（空字符串表示首轮）
+        @param user_query:      本轮用户查询文本
+        @param assistant_reply: 本轮助手回复文本（内部截断到 _MAX_REPLY_CHARS）
+        @return: 更新后的摘要文本
+        """
+        truncated_reply = assistant_reply[:self._MAX_REPLY_CHARS]
+        messages = self._render_messages(old_summary, user_query, truncated_reply)
+        response = self._call_llm(messages)
+        return self._clean_summary(response)
+
+    def _clean_summary(self, raw_text: str) -> str:
+        """清理 LLM 输出的废话前缀，截断到 max_chars"""
+```
+
+### 设计特点总结
+
+1. **增量压缩**：每次仅处理已有摘要 + 最新一轮 Q&A，输入长度恒定，不随对话轮数膨胀
+2. **双层防护输出清理**：prompt 约束（第一道防线）+ `_clean_summary()`（第二道防线兜底），最大化保障摘要文本干净可用
+3. **与 QueryRewriter 解耦**：共享一个本地 LLM 后端，但各自独立的类、模板和错误处理
+4. **纯文本输出**：压缩输出为纯文本（非 JSON），降低对 9B 模型输出格式的约束要求
+
+## 6.5 CompressService（异步压缩调度）
+
+CompressService 封装异步压缩的调度逻辑。每轮对话的回答生成后，CompressService 将压缩任务提交到项目全局线程池，不等待结果即返回，用户感知不到压缩的延迟。
+
+### 设计理念
+
+**为何复用项目全局线程池**。ZRAG 在 `settings.py` 中已有一个 `ZRAG_INGEST_EXECUTOR`（默认 2 workers），用于摄入任务的异步执行。压缩任务同样属于"在请求响应后可异步执行的轻量工作"。复用现有线程池避免创建第二个线程池——减少线程管理的复杂度，且压缩任务（秒级 LLM 调用 + 一次 DB 写入）的负载极低，不会与摄入任务（分钟级）产生资源竞争。CompressService 通过构造器注入 `executor` 参数，注入方式与 `TaskManager` 一致。
+
+**为何静默失败**。压缩失败的可能原因包括：本地模型不可用（Ollama 容器宕机）、LLM 调用超时、数据库写入失败、模型输出异常（摘要为空或格式错误）。这些失败不影响当前轮次的回答质量——用户已经收到了正常的 AI 回复。如果压缩失败时向上抛出异常或向用户展示错误，会破坏用户的核心交互体验。正确的故障边界是：压缩在后台静默失败，仅记录错误日志，不重试（避免连续失败的资源浪费）。下一轮追问时，QueryRewriter 降级使用旧摘要（或 null），改写质量轻微下降但不影响回答流程的完整性。
+
+**为何模块级单例**。压缩服务需要在 Django 应用的多个 ViewSet 方法间共享——`create()` 和 `add_message()` 都需要访问同一个 CompressService 实例。每次请求创建新实例会导致线程池引用混乱。采用模块级单例（DoLC 懒加载），`get_compress_service()` 为唯一入口，首次调用时从 Django settings 读取 `rewriter_model` 和 `ZRAG_INGEST_EXECUTOR` 并初始化，后续调用直接返回已有实例。
+
+**为何不传 db_path**。压缩任务运行在线程池工作线程中，线程运行在同一 Django 进程内，可以直接读取 `django.conf.settings.ZRAG_STORAGE`。`SqliteStore()` 无参数构造内部从 settings 读取 `sqlite_path`，因此无需在 CompressService 接口中传递 `db_path` 参数。且每个压缩任务创建独立的 `SqliteStore` 实例（获得独立 SQLite 连接），WAL 模式支持读写并发。
+
+### 核心实现
+
+```python
+class CompressService:
+    """异步压缩服务 — 复用项目全局线程池异步执行对话压缩"""
+
+    def __init__(self, executor, llm_provider):
+        self._executor = executor
+        self._summarizer = ConversationSummarizer(llm_provider=llm_provider)
+
+    def submit(self, conversation_id, old_summary, user_query, assistant_reply):
+        """提交异步压缩任务，立即返回（不等待结果）"""
+        self._executor.submit(
+            self._run, conversation_id, old_summary, user_query, assistant_reply,
+        )
+
+    def _run(self, conversation_id, old_summary, user_query, assistant_reply):
+        """压缩线程主逻辑：summarize → 写入 DB（独立 SqliteStore 连接）"""
+        # LLM 调用失败和 DB 写入失败均静默，仅写日志
+```
+
+### 设计特点总结
+
+1. **复用全局线程池**：与摄入任务共享，注入方式与 TaskManager 一致
+2. **静默失败**：任何异常仅记日志，不重试，不阻塞请求，不影响下一轮对话
+3. **模块级单例**：DoLC 懒加载，从 Django settings 自动读取配置
+4. **独立 DB 连接**：每个压缩任务创建独立 SqliteStore 实例，WAL 支持并发写
+
 ---
 
 # 7. LLM 集成
@@ -2028,9 +2284,34 @@ llm:
 
 模型路由通过 LiteLLM Gateway 的 `smart-router` 配置实现负载均衡，可用的底层模型包括 glm-5、kimi-k2.6、deepseek-v4-flash、minimax-m2.7、deepseek-v4-pro 等。Backend 不需要知道这些底层模型的存在——它只请求 `smart-router`，由 Gateway 根据各模型的实时状态自动选择最优路由。
 
----
+### 本地 LLM 部署（Ollama + Qwen3.5-9B）
 
-# 8. API 设计
+查询改写（QueryRewriter）和对话压缩（ConversationSummarizer）这类高频率、低语义难度的任务，从 API 模型切换到本地部署的小模型，既可以节省 API 消费，又可以获得更稳定的延迟（本地无排队）。
+
+**为何选择 Ollama 作为推理引擎**。Ollama 基于 llama.cpp 构建，是最简化的本地 LLM 部署方案——一行命令下载量化模型并启动 OpenAI 兼容的 HTTP API。它对 CPU 推理做了深度优化（Q4_K_M 量化格式、内存映射加载），对 macOS 和 Linux 均有良好支持。虽然 vLLM 在 GPU 高并发场景下吞吐量更高（连续批处理），但 ZRAG 是单用户、CPU 推理场景，Ollama 的简洁性远超 vLLM 的复杂性收益。且本地模型和其他云 API 模型均通过 LiteLLM Gateway 统一路由——Gateway 中新增 `ollama/qwen3.5:9b` 模型定义，指向 Ollama 的 `/v1` 端点，Backend 代码只需切换 `model` 参数即可在 API 模型和本地模型间切换。
+
+**为何选择 Qwen3.5-9B**。模型选型过程中评估了多个方案。Qwen2.5-7B-Instruct（7B 参数）在中文指代消解和 JSON 输出约束上均有可靠表现，CPU Q4 推理约 4-7s，是 7B 级别的最优选择。Qwen3.5 系列跳过了 7B-8B 区间——Qwen3.5-4B（5B 参数）参数偏少，中文指代消解质量存疑；Qwen3.5-9B（10B 参数）参数偏多但指令跟随能力更强（IFEval 91.5 分，BFCL-V4 66.1 分显示可靠的 JSON 输出能力）。Qwen3.5-9B-Base 为纯基座模型，未经指令微调，无法直接用于对话——Base 模型会将系统 prompt 视为待续写的文本而非指令。最终选择 Qwen3.5-9B，权衡多出的 3-4s CPU 延迟换取更可靠的中文语义理解、指令跟随和 JSON 输出质量。模型 Q4_K_M 量化后约 6GB 磁盘，CPU 推理延迟约 7-11s/次。
+
+**为何通过 LiteLLM Gateway 统一路由而非跳过 Gateway 直连 Ollama**。如果 QueryRewriter 和 ConversationSummarizer 直连 Ollama（`base_url=http://host.docker.internal:11434/v1`），则这些调用将游离于 LiteLLM Gateway 的监控、日志和告警体系之外，形成监控真空。所有 LLM 调用——无论本地还是云端——统一经 Gateway 路由，可获得统一维度的可观测性（调用量、延迟分布、失败率）。Gateway 中本地模型的 API base 指向 `http://host.docker.internal:11434`（Ollama 和 LiteLLM 不在同一 Docker compose 网络，通过宿主机端口通信）。
+
+**Ollama 部署方式**。Ollama 与 LiteLLM 属于同一级别的独立基础设施——不入 ZRAG 的 `docker-compose.yml`，独立 Docker 容器部署（`docker run -d --name ollama -p 11434:11434 -v ollama_data:/root/.ollama -e OLLAMA_KEEP_ALIVE=24h --memory="10g" ollama/ollama:0.9.0`）。`OLLAMA_KEEP_ALIVE=24h` 使模型加载后在内存中保持 24 小时，避免每次请求冷启动重新加载 6GB 权重（耗时数十秒）。内存限制 10GB：模型 6GB + 推理时 KV cache 等额外开销。模型文件持久化在 Docker volume `ollama_data` 中，更换电脑时拷贝 volume 即可。
+
+**BGE embedding 模型不受 Ollama 管理**。BGE 和 LLM 是两类完全不同的模型。BGE 属于 embedding 模型（encoder-only 架构），输入文字输出固定维度向量，由 `SentenceTransformer` 库加载。LLM 属于生成模型（decoder-only 架构），输入文字逐 token 输出新文字，由 Ollama/llama.cpp 加载。两者在架构、输入输出、推理库上完全不同，不存在"统一管理"的必要。BGE 继续通过 `SentenceTransformer` 在 `zrag/embed/local.py` 中进程内加载，保持零网络开销的毫秒级响应。
+
+**配置文件更新**。在 `config/llm.yaml` 的 `gateway` 段下新增 `rewriter_model` 字段，指定本地模型名称。`base_url` 不变（统一指向 LiteLLM Gateway），仅 `model` 参数不同实现路由区分：
+
+```yaml
+llm:
+  gateway:
+    base_url: "${LLM_GATEWAY_URL:-http://localhost:4000/v1}"
+    api_key: "${LITELLM_MASTER_KEY:-sk-dummy}"
+    model: "smart-router"
+    rewriter_model: "${REWRITER_LLM_MODEL:-ollama/qwen3.5:9b}"
+```
+
+同时 `config/retrieval.yaml` 中新增 `summary_max_chars: 200` 控制摘要最大长度。
+
+**降级策略**。Ollama 容器不可用时（宕机、冷启动中），QueryRewriter 调用失败。此时 `retriever.py` 的 `hybrid_search()` 中 catch 异常，降级为使用原始 query 继续检索。回答请求不中断，仅检索质量可能因缺少改写而下降。运维层面依赖 LiteLLM Gateway 的监控告警发现本地模型异常。
 
 ## 8.1 统一响应格式
 

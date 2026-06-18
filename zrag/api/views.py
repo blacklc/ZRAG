@@ -241,8 +241,15 @@ class ConversationViewSet(viewsets.ViewSet):
         if hasattr(self, 'retriever') and self.retriever is not None:
             return self.retriever
         from zrag.embed.local import get_embedder
+        from zrag.llm.gateway import LLMGatewayProvider
+        from zrag.retrieval.query_rewriter import QueryRewriter
         from zrag.retrieval.retriever import Retriever
         from zrag.store.vector_store import get_chroma_store
+        from django.conf import settings
+        rewriter_llm = LLMGatewayProvider(
+            model=settings.ZRAG_LLM["gateway"]["rewriter_model"],
+        )
+        query_rewriter = QueryRewriter(llm_provider=rewriter_llm)
         chroma = (
             self.chroma_store
             if hasattr(self, 'chroma_store') and self.chroma_store is not None
@@ -258,6 +265,7 @@ class ConversationViewSet(viewsets.ViewSet):
             sqlite_store=store,
             chroma_store=chroma,
             embedder=emb,
+            query_rewriter=query_rewriter,
         )
         return self.retriever
 
@@ -463,6 +471,11 @@ class ConversationViewSet(viewsets.ViewSet):
         messages = build_rag_prompt(query, results)
 
         llm = self._get_llm()
+        logger.debug(
+            "[req=%s] create full_messages: roles=%s",
+            req_id,
+            [m["role"] for m in messages],
+        )
         reply = llm.chat(messages)
         if reply is None:
             raise LLMCallException("LLM returned no response")
@@ -496,6 +509,16 @@ class ConversationViewSet(viewsets.ViewSet):
         )
         logger.info("[req=%s] 消息已保存 conversation_id=%s", req_id, conversation_id)
 
+        # 首轮对话摘要为空，old_summary=""
+        from zrag.utils.compress import get_compress_service
+        get_compress_service().submit(
+            conversation_id=conversation_id,
+            old_summary="",
+            user_query=query,
+            assistant_reply=reply,
+        )
+        logger.info("[req=%s] 压缩任务已提交 conversation_id=%s", req_id, conversation_id)
+
         return APIResponse(
             data={
                 "conversation_id": conversation_id,
@@ -528,7 +551,7 @@ class ConversationViewSet(viewsets.ViewSet):
         summary="在已有会话中追加消息",
         description=(
             "在已有会话中追加问题并执行 RAG 问答。流程：\n"
-            "1. 校验会话存在\n2. 加载最近 10 条历史消息\n"
+            "1. 校验会话存在\n2. 加载最近 3 条历史消息\n"
             "3. hybrid_search 检索\n4. 构建含历史的消息列表\n"
             "5. LLM 调用\n6. 写入消息\n7. 返回回复"
         ),
@@ -547,7 +570,7 @@ class ConversationViewSet(viewsets.ViewSet):
         接收 POST /v1/conversations/{id}/messages 请求, 请求体需包含 query 字段。
         流程:
           1. 校验 conversation_id 存在, 不存在则返回 404
-          2. 获取该会话最近 10 条消息作为历史上下文
+          2. 获取该会话最近 3 条消息作为历史上下文
           3. hybrid_search 检索 + build_rag_prompt 构建 system message
           4. 将历史消息插入 system 和 user 之间, 形成完整消息列表
           5. LLM 调用获取回复
@@ -586,27 +609,55 @@ class ConversationViewSet(viewsets.ViewSet):
         if conv is None:
             raise NotFoundException(f"Conversation {conversation_id} not found")
 
+        from django.conf import settings
+        max_history = getattr(settings, "ZRAG_RETRIEVAL", {}).get("history_max_messages", 4)
         history_rows = store.fetch_all(
             "SELECT role, content FROM messages "
-            "WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 10",
-            (conversation_id,),
+            "WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?",
+            (conversation_id, max_history),
         )
         history = list(reversed(history_rows))
         logger.info("[req=%s] 历史消息已加载 conversation_id=%s history_count=%d", req_id, conversation_id, len(history))
 
         retriever = self._get_retriever()
-        results = retriever.hybrid_search(query, k=10)
+        # 读取对话摘要
+        conv = store.fetch_one(
+            "SELECT summary FROM conversations WHERE id = ?",
+            (conversation_id,),
+        )
+        summary = conv["summary"] if conv and conv.get("summary") else None
+        if summary:
+            logger.info("[req=%s] 会话摘要已加载 conversation_id=%s summary_len=%d", req_id, conversation_id, len(summary))
+        else:
+            logger.info("[req=%s] 会话摘要为空 conversation_id=%s", req_id, conversation_id)
+
+        # 检索（传入摘要）
+        results = retriever.hybrid_search(query, k=10, summary=summary)
         logger.info("[req=%s] 检索完成 conversation_id=%s results_count=%d", req_id, conversation_id, len(results))
 
         rag_messages = build_rag_prompt(query, results)
         system_msg = rag_messages[0]
 
         full_messages = [system_msg]
+
+        # 摘要作为第 2 条 system 消息（紧跟 rag prompt 之后）
+        if summary:
+            summary_msg = {
+                "role": "system",
+                "content": f"对话背景摘要：\n{summary}",
+            }
+            full_messages.append(summary_msg)
+
         for h in history:
             full_messages.append({"role": h["role"], "content": h["content"]})
         full_messages.append({"role": "user", "content": query})
 
         llm = self._get_llm()
+        logger.debug(
+            "[req=%s] full_messages: roles=%s",
+            req_id,
+            [m["role"] for m in full_messages],
+        )
         reply = llm.chat(full_messages)
         if reply is None:
             raise LLMCallException("LLM returned no response")
@@ -639,6 +690,16 @@ class ConversationViewSet(viewsets.ViewSet):
             (assistant_msg_id, conversation_id, "assistant", reply, sources_json),
         )
         logger.info("[req=%s] 消息已保存 conversation_id=%s", req_id, conversation_id)
+
+        # 异步压缩（不等待）
+        from zrag.utils.compress import get_compress_service
+        get_compress_service().submit(
+            conversation_id=conversation_id,
+            old_summary=summary or "",
+            user_query=query,
+            assistant_reply=reply,
+        )
+        logger.info("[req=%s] 压缩任务已提交 conversation_id=%s", req_id, conversation_id)
 
         return APIResponse(
             data={
