@@ -8,3 +8,4 @@ llm:
     api_key: "${LITELLM_MASTER_KEY:-sk-dummy}"
     model: "smart-router"
     rewriter_model: "${REWRITER_LLM_MODEL:-qwen3:4b-instruct-2507-q4_K_M}"
+    rewriter_model_context_window: 32768  # Qwen3-4B-Instruct-2507 上下文窗口 (tokens)

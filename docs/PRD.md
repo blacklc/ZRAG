@@ -86,13 +86,17 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 - 压缩在响应返回后异步执行（复用全局线程池 ZRAG_INGEST_EXECUTOR），不阻塞用户请求
 - 异步压缩失败静默降级：仅写日志，不重试，不影响下次对话。下次追问时使用旧摘要
 - 首轮对话结束后的压缩在 create 端点中触发（与 add_message 相同流程）
+- 摘要压缩的 prompt 各部分大小不再硬编码，改为基于模型 context_window 动态计算
+- user_query 和 assistant_reply 按 token 预算比例分配：user_query 保留 1/4 预算，assistant_reply 保留 3/4
+- 中文按约 1.5 字符/token 估算，截断时向上取整
 
 ### 本地小模型（查询改写 + 对话压缩）
 
-- 模型选型：Qwen3.5-9B，Q4_K_M 量化（约 6GB 磁盘），CPU 推理延迟约 7-11 秒/次
+- 模型选型：Qwen3-4B-Instruct-2507，Q4_K_M 量化（约 6GB 磁盘），CPU 推理延迟约 7-11 秒/次
+- Qwen3-4B-Instruct-2507 上下文窗口：32,768 tokens，通过 `rewriter_model_context_window` 配置
 - 部署方式：Ollama 独立 Docker 容器（`ollama/ollama:0.9.0`），`docker run -d --name ollama -p 11434:11434 -v ollama_data:/root/.ollama -e OLLAMA_KEEP_ALIVE=24h -e OLLAMA_HOST=0.0.0.0 --memory="10g"`。Ollama 与 LiteLLM 属于同一级别的独立基础设施，不入 ZRAG 的 docker-compose.yml，独立部署、独立升级、可被多个项目复用
-- LiteLLM Gateway 中注册 Ollama 后端：`model_name: ollama/qwen3.5:9b, api_base: http://host.docker.internal:11434`
-- 查询改写和对话压缩通过统一 LiteLLM Gateway 路由，均使用 `model=ollama/qwen3.5:9b`，与 Chat 生成的 `smart-router` 走同一个 base_url
+- LiteLLM Gateway 中注册 Ollama 后端：`model_name: qwen3:4b-instruct-2507-q4_K_M, api_base: http://host.docker.internal:11434`
+- 查询改写和对话压缩通过统一 LiteLLM Gateway 路由，均使用 `model=qwen3:4b-instruct-2507-q4_K_M`，与 Chat 生成的 `smart-router` 走同一个 base_url
 - Chat 生成继续走云 API 模型（smart-router），不受影响
 - BGE embedding 模型不受影响：Embedding 模型（encoder-only）与 LLM（decoder-only）架构不同，Ollama 不支持。BGE 继续通过 SentenceTransformer 进程内加载，保持零网络开销
 - 降级策略：Ollama 不可用时（容器宕机、冷启动超时），查询改写自动降级使用原始 query，回答请求不中断
@@ -101,16 +105,19 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 ### 新增模块：ConversationSummarizer
 
 - 职责：将多轮对话内容压缩为简洁的自然语言摘要，用于注入查询改写阶段
-- 公开接口：`summarize(old_summary, user_query, assistant_reply) → str`
+- 公开接口：`summarize(old_summary, user_query, assistant_reply, max_chars=200, context_window=32768) → str`
+- `max_chars` 和 `context_window` 作为方法形参而非对象属性，便于每次调用灵活调整
+- 仅注入 LLM provider（构造函数参数），模板路径硬编码
 - 内部封装：Jinja2 模板渲染（compress.j2）+ LLM 调用 + 输出清理（移除废话前缀，截断到 max_chars）
-- 助手回复超过 500 字时自动截断，避免 prompt 膨胀
-- 输出清理策略：匹配并移除 "好的、"、"以下是"、"更新后的摘要："、"摘要："、"总结："、"：" 等常见前缀；模板中通过严格输出规则约束 LLM 不产生废话
+- 动态截断：根据 context_window 扣除固定开销后，按 1:3 分配 user_query 和 assistant_reply 的 token 预算，中文按约 1.5 字符/token 换算
+- 删除硬编码 `_MAX_REPLY_CHARS = 500`
 
 ### 新增模块：CompressService
 
 - 职责：封装异步压缩的调度逻辑，线程池管理 + ConversationSummarizer 调用
 - 公开接口：`submit(conversation_id, old_summary, user_query, assistant_reply)` → 立即返回
 - 复用项目全局线程池（ZRAG_INGEST_EXECUTOR，默认 2 workers），不新建线程池
+- `_run()` 内部从 settings 读取 `rewriter_model_context_window` 和 `summary_max_chars`，在调用 `summarize()` 时作为参数传入
 - 模块级单例（DoLC 懒加载），首次调用时从 Django settings 读取 rewriter_model 和线程池配置
 - 线程安全：压缩任务创建独立的 SqliteStore 实例（WAL 模式支持并发写），不共享主请求线程的连接
 - 静默失败：压缩 LLM 调用或 DB 写入失败仅写日志，不抛异常，不重试
@@ -130,6 +137,7 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 
 - query_rewrite.j2：新增指代消解指令（引导 LLM 结合摘要解析 "它""这个" 等指代词）；同义词替换策略改为核心词提取（"实现原理"→"原理"），降低对 LLM 领域知识的依赖
 - compress.j2（新建）：压缩 prompt 模板，约束输出格式为纯文本、禁止废话前缀，支持 `max_chars` 参数注入
+  - `{{ max_chars }}` 参数由 `summarize()` 调用时动态传入
 
 ### 数据库 Schema 变更
 
@@ -141,9 +149,10 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 
 ### 配置文件变更
 
-- config/llm.yaml：在 gateway 段下新增 `rewriter_model: "${REWRITER_LLM_MODEL:-ollama/qwen3.5:9b}"`。base_url 不变（统一指向 LiteLLM Gateway），仅 model 参数不同实现路由区分
+- config/llm.yaml：在 gateway 段下新增 `rewriter_model: "${REWRITER_LLM_MODEL:-qwen3:4b-instruct-2507-q4_K_M}"`。base_url 不变（统一指向 LiteLLM Gateway），仅 model 参数不同实现路由区分
+- config/llm.yaml：在 gateway 段下新增 `rewriter_model_context_window: 32768`（Qwen3-4B-Instruct-2507 上下文窗口）
 - config/retrieval.yaml：新增 `summary_max_chars: 200`
-- .env 新增：`REWRITER_LLM_MODEL=ollama/qwen3.5:9b`
+- .env 新增：`REWRITER_LLM_MODEL=qwen3:4b-instruct-2507-q4_K_M`
 
 ### API 层
 
@@ -402,7 +411,7 @@ CREATE TABLE ingest_tasks (id TEXT PK, task_type TEXT NOT NULL, status TEXT NOT 
 
 - 参考项目：zonebank（DRF 模式、异常处理、uWSGI 配置）
 - LiteLLM Gateway 配置位于 ~/.claude/litellm/config.yaml，已配置 smart-router 负载均衡
-- LiteLLM Gateway 配置中新增 `ollama/qwen3.5:9b` 模型指向本地 Ollama（api_base: http://host.docker.internal:11434）
+- LiteLLM Gateway 配置中新增 `qwen3:4b-instruct-2507-q4_K_M` 模型指向本地 Ollama（api_base: http://host.docker.internal:11434）
 - Ollama 独立 Docker 容器部署（docker run），模型文件约 6GB 持久化在 ollama_data volume 中。更换电脑时拷贝 volume 数据即可
 - 整个项目在同一 Git 仓库中（zrag/ 后端 + frontend/ 前端）
 - 全部模块设计方案及各模块代码片段记录于 docs/QA/（Q0-Q35）

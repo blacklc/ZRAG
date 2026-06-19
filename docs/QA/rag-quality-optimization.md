@@ -375,3 +375,83 @@
 4. 摘要为空时跳过插入，不影响首轮对话
 
 ---
+
+## Q25: 摘要压缩时 assistant_reply 被过度截断
+
+**问题**：`ConversationSummarizer` 中使用 `_MAX_REPLY_CHARS = 500` 硬编码截断 `assistant_reply`。RAG 回答轻松超过 500 字符，导致压缩输入中最新一轮的回答信息严重丢失。
+
+**分析**：
+- 过小的截断阈值导致压缩器无法感知 assistant 回答的完整内容，压缩结果可能丢失关键信息。
+- 硬编码值无法适配不同模型的上下文窗口差异——小模型窗口小，大模型窗口大，统一截断不合理。
+
+**结论**：`assistant_reply` 的截断长度应基于模型 `context_window` 按比例动态计算，而非硬编码固定值。
+
+**方案**：
+1. 将 `_MAX_REPLY_CHARS` 改为从外部传入的配置参数，默认值基于 `context_window` 的 30%-50% 计算
+2. 确保压缩器传入的 prompt 总长度（system_prompt + old_summary + user_query + assistant_reply）不超过 `context_window` 的 80%，为模型输出预留空间
+
+## Q26: prompt 各部分大小限制设计
+
+**问题**：会话压缩 prompt 由四部分组成（system_prompt、old_summary、user_query、assistant_reply），各部分应有合理的大小限制，以适配模型的 `context_window`。
+
+**各部分限制分析**：
+
+| 部分 | 大小 | 说明 |
+|------|------|------|
+| `system_prompt`（compress.j2） | ~200 字符 | 模板固定，几乎不变 |
+| `old_summary` | ≤200 字符 | 上一轮已截断，传入时已在合理范围内 |
+| `user_query` | 需加限制 | 之前无限制，多轮对话中单次 query 可能过长 |
+| `assistant_reply` | 需重新设计 | 当前 500 字符硬编码，不合理 |
+
+**结论**：
+1. `context_window` 配置不放在 `config/retrieval.yaml`，应放在 `config/llm.yaml`，因为它是模型本身的属性
+2. 配置项命名：`rewriter_model_context_window`
+3. `user_query` 增加截断保护，上限设为 `context_window` 的 20%
+4. `assistant_reply` 截断长度改为 `context_window` 的 30%，替代原来的 500 字符硬编码
+5. 最终的 prompt 总长不应超过 `context_window` 的 80%
+
+**设计决策**：
+- 为什么 `context_window` 放在 `llm.yaml`：context_window 大小由模型决定（跟着模型走），而非检索业务决定。`retrieval.yaml` 存放检索策略参数，`llm.yaml` 存放模型能力参数。
+- 为什么配置名用 `rewriter_model_context_window` 而非 `rewriter_context_window`：明确指出是哪个模型，为将来引入独立压缩/改写模型预留清晰命名空间。
+
+## Q27: 接口净化 — 任务参数下移到方法形参
+
+**问题**：`ConversationSummarizer.__init__` 接收了大量任务参数（`max_chars`、`context_window`、`template_dir`），其中 `template_dir` 在后续实现中始终指向固定路径（项目内），`max_chars` 和 `context_window` 仅在 `summarize()` 调用时使用。
+
+**分析**：对象构造时应只接收与对象身份相关的依赖（如 `llm_provider`），而任务参数应绑定到方法调用层面。将任务参数放在构造函数中会导致：
+- 每次调整参数都需要重新创建实例
+- 难以适配同一实例对不同轮次使用不同压缩参数
+- 构造函数签名膨胀，职责模糊
+
+**方案**：
+1. `template_dir` 从 `__init__` 参数中删除，改为在 `ConversationSummarizer` 内部硬编码为 `zrag/prompts/compress/`
+2. `max_chars` 和 `context_window` 从 `__init__` 移至 `summarize()` 的方法形参，提供合理默认值
+3. `ConversationSummarizer.__init__` 仅保留 `llm_provider` 一个参数
+
+**改造前**：
+```python
+class ConversationSummarizer:
+    def __init__(self, llm_provider, max_chars=200, context_window=8192, template_dir="..."):
+```
+
+**改造后**：
+```python
+class ConversationSummarizer:
+    def __init__(self, llm_provider):
+        ...
+
+    async def summarize(
+        self,
+        old_summary: str,
+        user_query: str,
+        assistant_reply: str,
+        max_chars: int = 200,
+        context_window: int = 8192,
+    ) -> str:
+```
+
+**How to apply**：
+1. `llm_provider` 是对象的身份属性——注入后不再变更，放在 `__init__`
+2. `max_chars`（本轮压缩目标长度）和 `context_window`（模型上下文窗口）是单次调用的参数——放在 `summarize()` 方法形参
+3. `template_dir` 固定为项目内的 `zrag/prompts/compress/`，无需外部覆盖——直接硬编码
+4. 这一净化原则适用于项目中其他类：区分"对象是什么"（构造函数）和"对象做什么"（方法参数）

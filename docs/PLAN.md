@@ -404,4 +404,23 @@
 | 118 | 模型部署 | Docker → Ollama → Qwen3.5-9B → LiteLLM Gateway 配置 → 连通性验证 |
 | 119 | 摘要注入生成 | `views.py` add_message() — summary 作为第 2 条 system 消息 → `LIMIT 10` 改为 `LIMIT 3` → 全链路验证 |
 
+### 摘要压缩 prompt 大小动态限制（#120-#123）
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 120 | config/llm.yaml 新增 `rewriter_model_context_window` | AFK | 无 |
+| 121 | ConversationSummarizer 重构 — 动态截断 + 接口净化 | AFK | 120 |
+| 122 | CompressService._run() 联动 — 读取配置传入 | AFK | 121 |
+| 123 | 测试更新 + 全量验证 + 重建镜像 | AFK | 122 |
+
+### #120-#123 各切片覆盖层
+
+| # | 切片 | 覆盖层（端到端） |
+|:--:|------|------|
+| 120 | 配置新增 | `config/llm.yaml` → settings 加载验证 |
+| 121 | Summarizer 重构 | 删除 `_MAX_REPLY_CHARS` → 新增 `_truncate_by_chars()` → `summarize(max_chars, context_window)` 新签名 → 单元测试 |
+| 122 | CompressService 联动 | `compress.py` _run() — 读取 `rewriter_model_context_window` → 调用 `summarize()` 传入参数 |
+| 123 | 全量验证 | 全量测试 → 重建镜像 → 日志确认 assistant_reply 不再被硬编码 500 截断 |
+
+
 

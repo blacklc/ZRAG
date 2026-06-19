@@ -100,11 +100,20 @@ class CompressService:
         @param assistant_reply:  本轮助手回复
         @type  assistant_reply:  str
         """
+        from django.conf import settings
+
+        context_window = settings.ZRAG_LLM["gateway"].get(
+            "rewriter_model_context_window", 32768
+        )
+        max_chars = settings.ZRAG_RETRIEVAL.get("summary_max_chars", 200)
+
         try:
             new_summary = self._summarizer.summarize(
                 old_summary=old_summary,
                 user_query=user_query,
                 assistant_reply=assistant_reply,
+                max_chars=max_chars,
+                context_window=context_window,
             )
         except Exception:
             logger.exception(

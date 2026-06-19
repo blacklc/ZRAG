@@ -9,9 +9,6 @@
 - 非 JSON 格式输出
 """
 
-import os
-import tempfile
-
 from unittest.mock import MagicMock
 
 import pytest
@@ -23,20 +20,6 @@ class TestConversationSummarizer:
     """ConversationSummarizer 单元测试"""
 
     @pytest.fixture
-    def templates_dir(self):
-        """创建临时 templates 目录，内含最小化 compress.j2 模板
-
-        @yield: 临时目录路径
-        @rtype: str
-        """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            template_path = os.path.join(tmpdir, 'compress.j2')
-            with open(template_path, 'w') as f:
-                f.write("""请生成不超过{{ max_chars }}字的对话摘要。
-只输出摘要文本本身。""")
-            yield tmpdir
-
-    @pytest.fixture
     def llm_provider(self):
         """创建 Mock LLM Provider (提供 chat() 方法)
 
@@ -46,22 +29,16 @@ class TestConversationSummarizer:
         return MagicMock()
 
     @pytest.fixture
-    def summarizer(self, llm_provider, templates_dir):
+    def summarizer(self, llm_provider):
         """构造 ConversationSummarizer 实例
 
         @param llm_provider: Mock LLM Provider
         @type  llm_provider: MagicMock
-        @param templates_dir: 临时 templates 目录
-        @type  templates_dir: str
 
         @return: ConversationSummarizer 实例
         @rtype: ConversationSummarizer
         """
-        return ConversationSummarizer(
-            llm_provider=llm_provider,
-            template_dir=templates_dir,
-            max_chars=200,
-        )
+        return ConversationSummarizer(llm_provider=llm_provider)
 
     # ---- 测试用例 ----
 
@@ -109,20 +86,21 @@ class TestConversationSummarizer:
         assert len(result) == 200
 
     def test_reply_truncation(self, summarizer, llm_provider):
-        """回复截断: 传入超长 assistant_reply（超过500字符），
-        验证 LLM 收到的 user message 中包含截断后的回复（500字符）
+        """回复截断: 传入超长 assistant_reply，
+        验证 reply 会根据 context_window 被截断
         """
         llm_provider.chat.return_value = "测试摘要"
         long_reply = "A" * 1000
-        summarizer.summarize("", "测试查询", long_reply)
+        # 使用小 context_window 触发截断
+        summarizer.summarize("", "测试查询", long_reply, context_window=1044)
 
         llm_provider.chat.assert_called_once()
         args, _ = llm_provider.chat.call_args
         messages = args[0]
         user_content = messages[1]["content"]
-        # 验证助手回答部分被截断到 500 字符
-        assert "A" * 500 in user_content
-        assert "A" * 501 not in user_content
+        # 验证完整的 1000 字符回复不在 content 中（已被截断）
+        assert "A" * 1000 not in user_content
+        assert "测试查询" in user_content
 
     def test_summarize_returns_text_not_json(self, summarizer, llm_provider):
         """非 JSON 格式输出: mock LLM 返回纯文本摘要，
