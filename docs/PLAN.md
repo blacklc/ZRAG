@@ -1,6 +1,6 @@
 # ZRAG 实现计划
 
-> 最后更新: 2026-06-17
+> 最后更新: 2026-06-19
 
 ## 切片规则
 
@@ -280,6 +280,7 @@
 | 117 | views.py 多轮对话全流程集成 | ⬜ | 110,111,113,116 | - |
 | 118 | Ollama 基础设施部署 | ⚠ HITL | - | - |
 | 119 | 摘要注入 LLM 生成 + 历史缩减（LIMIT 10→3） | AFK | 117 | - |
+| 125 | 摘要空值处理 — 统一 user message 格式 + 检索日志级别规范 | AFK | 124 |
 
 - ✅ 已完成 · 🔄 进行中 · ⬜ 待开始 · ⚠ HITL 升级
 
@@ -421,6 +422,41 @@
 | 121 | Summarizer 重构 | 删除 `_MAX_REPLY_CHARS` → 新增 `_truncate_by_chars()` → `summarize(max_chars, context_window)` 新签名 → 单元测试 |
 | 122 | CompressService 联动 | `compress.py` _run() — 读取 `rewriter_model_context_window` → 调用 `summarize()` 传入参数 |
 | 123 | 全量验证 | 全量测试 → 重建镜像 → 日志确认 assistant_reply 不再被硬编码 500 截断 |
+
+### 摘要内容格式改为 Q&A 导向（#124）
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 124 | 摘要内容格式改为 Q&A 导向 — compress.j2 重写、summary_max_chars 200→500、测试更新 | AFK | 无 |
+
+**涉及文件**：
+- `zrag/prompts/compress.j2` — 重写摘要要求，从"概括对话主题、核心概念"改为 Q&A 导向指令 + 示例引导
+- `config/retrieval.yaml` — `summary_max_chars: 200` → `500`
+- `tests/test_conversation_summarizer.py` — 测试断言改为 Q&A 导向形式特征断言
+
+**验收标准**：
+- [ ] compress.j2 模板重写：摘要要求改为描述用户提出的问题/关注点 + 助手给出的关键回答要点；包含示例格式参考（"用户询问了...，助手介绍了..."）；多轮融合规则（保留时间线、追加新内容、优先最近轮次）
+- [ ] config/retrieval.yaml 中 summary_max_chars 改为 500
+- [ ] test_conversation_summarizer.py 测试断言改为 Q&A 导向形式特征检查（如摘要包含"用户询问"等关键词）
+- [ ] 全量测试通过
+
+### 摘要空值处理（#125）
+
+| # | 切片名称 | 类型 | 依赖 |
+|---|---------|:--:|------|
+| 125 | 摘要空值处理 — 统一 user message 格式 + 检索日志级别规范 | AFK | 124 |
+
+**涉及文件**：
+- `zrag/retrieval/query_rewriter.py` — `_render_messages()` 统一有无摘要时的 user message 格式，始终使用 `"对话上下文摘要：{summary or '（无）'}\n\n当前用户查询：{query}"`
+- `zrag/retrieval/retriever.py` — `hybrid_search()` summary 入口处补齐日志（有摘要→info，无摘要→warning）；Path A/Path B 逐 chunk 日志从 info 降为 debug；QueryRewriter 改写成功和 _build_results 汇总保持 info 级别
+
+**验收标准**：
+- [ ] 无摘要时 user message 格式为 `"对话上下文摘要：（无）\n\n当前用户查询：{query}"`
+- [ ] 有摘要时 user message 格式为 `"对话上下文摘要：{summary}\n\n当前用户查询：{query}"`
+- [ ] 首轮对话（无摘要）→ 日志出现 warning 级别
+- [ ] 后续追问（有摘要）→ 日志出现 info 级别
+- [ ] Path A/B 日志仅在 debug 级别输出
+- [ ] 全量测试无回归
 
 
 

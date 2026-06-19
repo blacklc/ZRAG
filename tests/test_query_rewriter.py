@@ -222,7 +222,7 @@ class TestQueryRewriter:
         assert "Pod 的水平自动伸缩配置" in messages[1]["content"]
 
     def test_rewrite_without_summary(self, rewriter, llm_provider):
-        """不传摘要: 验证向后兼容, 行为与旧版本一致"""
+        """不传摘要: 验证 user message 中包含（无）占位符"""
         llm_provider.chat.return_value = json.dumps({
             "keywords": "Kubernetes 自动伸缩",
             "refined_query": "如何在 Kubernetes 中配置自动伸缩",
@@ -232,14 +232,14 @@ class TestQueryRewriter:
             "keywords": "Kubernetes 自动伸缩",
             "refined_query": "如何在 Kubernetes 中配置自动伸缩",
         }
-        # 验证 LLM 收到的 user message 不包含摘要前缀
+        # 验证 LLM 收到的 user message 包含（无）占位符
         llm_provider.chat.assert_called_once()
         args, _ = llm_provider.chat.call_args
         messages = args[0]
         assert len(messages) == 2
         assert messages[1]["role"] == "user"
-        assert messages[1]["content"] == "怎么在k8s里配自动伸缩啊"
-        assert "对话上下文摘要" not in messages[1]["content"]
+        assert "对话上下文摘要：（无）" in messages[1]["content"]
+        assert "当前用户查询：怎么在k8s里配自动伸缩啊" in messages[1]["content"]
 
     def test_coreference_resolution(self, rewriter, llm_provider):
         """指代消解: 验证带指代词的查询能被正确改写"""
@@ -266,3 +266,34 @@ class TestQueryRewriter:
         assert result["keywords"] == "Kubernetes 默认调度器 原理"
         assert "实现原理" not in result["keywords"]
         assert "原理" in result["keywords"]
+
+    # ---- 切片 #125: _render_messages 格式统一 ----
+
+    def test_render_messages_without_summary_includes_none_placeholder(
+        self, rewriter, llm_provider,
+    ):
+        """无摘要时 user message 应包含 '（无）' 而非裸传原始查询"""
+        llm_provider.chat.return_value = json.dumps({
+            "keywords": "test",
+            "refined_query": "test query",
+        })
+        rewriter.rewrite("测试查询", summary=None)
+        call_args = llm_provider.chat.call_args[0][0]
+        user_content = call_args[1]["content"]
+        assert "对话上下文摘要：" in user_content
+        assert "（无）" in user_content
+        assert "当前用户查询：测试查询" in user_content
+
+    def test_render_messages_with_summary_includes_summary_text(
+        self, rewriter, llm_provider,
+    ):
+        """有摘要时 user message 应包含摘要内容"""
+        llm_provider.chat.return_value = json.dumps({
+            "keywords": "test",
+            "refined_query": "test query",
+        })
+        rewriter.rewrite("测试查询", summary="用户之前问了K8s的问题")
+        call_args = llm_provider.chat.call_args[0][0]
+        user_content = call_args[1]["content"]
+        assert "对话上下文摘要：用户之前问了K8s的问题" in user_content
+        assert "当前用户查询：测试查询" in user_content

@@ -5,5 +5,5 @@ retrieval:
   rrf_weights:
     vector: 1.0
     keyword: 1.0
-  summary_max_chars: 200
+  summary_max_chars: 500
   history_max_messages: 4

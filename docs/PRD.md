@@ -79,10 +79,12 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 
 ### 上下文感知检索（多轮对话优化）
 
-- 每轮对话回答生成后，系统异步将当前 Q&A 压缩为自然语言摘要，存入 conversations 表的 summary 字段
+- 每轮对话回答生成后，系统异步将当前 Q&A 按 Q&A 导向压缩为自然语言摘要（描述"用户问了什么 + 助手答了什么"），存入 conversations 表的 summary 字段
 - 下一轮追问时，QueryRewriter 读取摘要，结合当前 query 做指代消解和查询改写
-- 摘要采用增量压缩策略：每次传入已有摘要 + 最新一轮 Q&A，LLM 生成更新后的摘要（最大 200 字）
-- 摘要长度通过配置项 `summary_max_chars` 控制，默认 200
+- 摘要采用增量压缩策略：每次传入已有摘要 + 最新一轮 Q&A，LLM 按 Q&A 导向生成更新后的摘要（描述"用户问了什么 + 助手答了什么"，最大 500 字）
+- 摘要格式经 compress.j2 模板约束：明确指令要求描述用户提出的问题/关注点 + 助手给出的关键回答要点，配合示例格式参考锚定 Q&A 导向输出，替代此前模糊的"概括对话主题、核心概念"指令
+- 多轮融合按时间线串下来（非话题归并）：保留已有摘要中的对话时间线，将本轮新内容追加到时间线末尾；接近长度上限时优先保留最近轮次，早期轮次可适度归并。选择时间线而非话题归并的理由：查询改写需要时序信息消解指代词，话题归并会丢失追问链
+- 摘要长度通过配置项 `summary_max_chars` 控制，默认 500（从 200 提升，以适应 Q&A 格式更丰富的信息密度。单轮新格式约 80-120 字，3-5 轮累积约 200-350 字，500 字留有安全边际）
 - 压缩在响应返回后异步执行（复用全局线程池 ZRAG_INGEST_EXECUTOR），不阻塞用户请求
 - 异步压缩失败静默降级：仅写日志，不重试，不影响下次对话。下次追问时使用旧摘要
 - 首轮对话结束后的压缩在 create 端点中触发（与 add_message 相同流程）
@@ -104,8 +106,8 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 
 ### 新增模块：ConversationSummarizer
 
-- 职责：将多轮对话内容压缩为简洁的自然语言摘要，用于注入查询改写阶段
-- 公开接口：`summarize(old_summary, user_query, assistant_reply, max_chars=200, context_window=32768) → str`
+- 职责：将多轮对话内容按 Q&A 导向压缩为自然语言摘要（描述"用户问了什么 + 助手答了什么"），用于注入查询改写阶段和 LLM 生成阶段
+- 公开接口：`summarize(old_summary, user_query, assistant_reply, max_chars=500, context_window=32768) → str`
 - `max_chars` 和 `context_window` 作为方法形参而非对象属性，便于每次调用灵活调整
 - 仅注入 LLM provider（构造函数参数），模板路径硬编码
 - 内部封装：Jinja2 模板渲染（compress.j2）+ LLM 调用 + 输出清理（移除废话前缀，截断到 max_chars）
@@ -126,18 +128,21 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 
 - 接口扩展：`rewrite(query, summary=None)` 新增 summary 参数
 - summary 注入到 user message 中（而非 system prompt），保持 system prompt 简洁不变
-- `_render_messages()` 渲染时，若有 summary 则在 user message 前缀注入 `"对话上下文摘要：{summary}\n\n当前用户查询：{query}"`
+- `_render_messages()` 渲染时，统一使用 `"对话上下文摘要：{summary or '（无）'}\n\n当前用户查询：{query}"` 格式，无论是否有摘要都保持相同结构。无摘要时用"（无）"明确告知 LLM，而非裸传原始查询
 
 ### 修改模块：Retriever
 
 - `hybrid_search()` 签名增加 `summary` 参数（默认 None），透传给 `query_rewriter.rewrite(query, summary)`
 - 查询改写调用包裹 try/except：失败时降级使用原始 query，记录 warning 日志
+- 日志级别规范：
+  - `hybrid_search()` 在 summary 入口处：有摘要 → info，无摘要 → warning（缺失摘要意味着查询改写失去指代消解支撑，属于需关注但不阻塞的事件）
+  - 混合检索内部 Path A (keyword) 和 Path B (vector+SQLite) 逐 chunk 日志从 info 降为 debug（属于排查用细节）
+  - QueryRewriter 改写成功、_build_results 汇总保持 info 级别
 
 ### Prompt 模板更新
 
 - query_rewrite.j2：新增指代消解指令（引导 LLM 结合摘要解析 "它""这个" 等指代词）；同义词替换策略改为核心词提取（"实现原理"→"原理"），降低对 LLM 领域知识的依赖
-- compress.j2（新建）：压缩 prompt 模板，约束输出格式为纯文本、禁止废话前缀，支持 `max_chars` 参数注入
-  - `{{ max_chars }}` 参数由 `summarize()` 调用时动态传入
+- compress.j2：压缩 prompt 模板。摘要要求改为明确的 Q&A 导向指令（描述用户提出的问题/关注点 + 助手给出的关键回答要点），配合示例格式参考（"用户询问了...，助手介绍了..."）锚定输出格式，替代此前模糊的"概括对话主题、核心概念"指令。多轮融合规则：保留已有时间线，追加本轮新内容，优先保留最近轮次。约束输出格式为纯文本、禁止废话前缀。`{{ max_chars }}` 参数由 `summarize()` 调用时动态传入
 
 ### 数据库 Schema 变更
 
@@ -151,7 +156,7 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 
 - config/llm.yaml：在 gateway 段下新增 `rewriter_model: "${REWRITER_LLM_MODEL:-qwen3:4b-instruct-2507-q4_K_M}"`。base_url 不变（统一指向 LiteLLM Gateway），仅 model 参数不同实现路由区分
 - config/llm.yaml：在 gateway 段下新增 `rewriter_model_context_window: 32768`（Qwen3-4B-Instruct-2507 上下文窗口）
-- config/retrieval.yaml：新增 `summary_max_chars: 200`
+- config/retrieval.yaml：新增 `summary_max_chars: 500`
 - .env 新增：`REWRITER_LLM_MODEL=qwen3:4b-instruct-2507-q4_K_M`
 
 ### API 层
@@ -299,7 +304,7 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
       rrf_weights:
         vector: 1.0
         keyword: 1.0
-      summary_max_chars: 200
+      summary_max_chars: 500
     ```
 - 动态合并加载器：排序 glob -> 合并嵌套键 -> 解析环境变量 ${VAR} -> 环境变量覆盖
 - 配置加载三阶段流程：
@@ -356,9 +361,9 @@ CREATE TABLE ingest_tasks (id TEXT PK, task_type TEXT NOT NULL, status TEXT NOT 
 
 | 模块 | 测试重点 |
 |------|---------|
-| ConversationSummarizer（新） | summarize 首轮/增量压缩正确性、_clean_summary 废话前缀移除、max_chars 截断、助手回复截断、输出为纯文本非 JSON |
+| ConversationSummarizer | summarize 首轮/增量压缩正确性、_clean_summary 废话前缀移除、max_chars 截断、助手回复截断、输出为 Q&A 导向格式（形式特征断言，如包含"用户询问"等关键词，不依赖 LLM 输出质量） |
 | CompressService（新） | submit 后摘要写入 DB、LLM 调用失败静默不抛异常、并发提交不出现竞态崩溃 |
-| QueryRewriter（修改） | 传入 summary 时 user message 包含摘要、不传 summary 时 user message 仅为 query、LLM 结合摘要解析指代、核心词提取策略 |
+| QueryRewriter（修改） | 传入 summary 时 user message 包含摘要、不传 summary 时 user message 应包含 `"对话上下文摘要：（无）"` 而非仅为原始 query、LLM 结合摘要解析指代、核心词提取策略 |
 | Retriever（修改） | QueryRewriter 调用失败时降级使用原始 query |
 | 集成测试 | 模拟 3 轮对话，验证摘要逐轮更新、改写使用正确摘要 |
 

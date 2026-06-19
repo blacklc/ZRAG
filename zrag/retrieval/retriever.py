@@ -93,8 +93,10 @@ class Retriever:
                  每个结果包含 chunk_id / content / doc_title / source_id / source_type / score
         @type:   list[SearchResult]
         """
-        if summary is not None:
-            logger.debug("hybrid_search with summary", extra={"summary_len": len(summary)})
+        if summary:
+            logger.info("hybrid_search with summary", extra={"summary_len": len(summary)})
+        else:
+            logger.warning("hybrid_search without summary，检索将跳过指代消解")
 
         if self.query_rewriter is not None:
             try:
@@ -233,7 +235,7 @@ class Retriever:
                 chunk_index=kr.get('chunk_index'),
             )
             path_a_count += 1
-            logger.info(
+            logger.debug(
                 "Path A (keyword)",
                 extra={"chunk_id": cid, "doc_title": kr['doc_title'], "score": rrf_scores.get(cid, 0.0)},
             )
@@ -257,7 +259,7 @@ class Retriever:
                         chunk_index=row.get('chunk_index'),
                     )
                     path_b_count += 1
-                    logger.info(
+                    logger.debug(
                         "Path B (vector+SQLite)",
                         extra={"chunk_id": cid, "doc_title": row['doc_title'], "score": rrf_scores.get(cid, 0.0)},
                     )

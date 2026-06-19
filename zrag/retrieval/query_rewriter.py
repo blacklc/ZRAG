@@ -88,9 +88,7 @@ class QueryRewriter:
         @rtype:  list[dict]
         """
         system_prompt = self._template.render()
-        user_content = query
-        if summary:
-            user_content = f"对话上下文摘要：{summary}\n\n当前用户查询：{query}"
+        user_content = f"对话上下文摘要：{summary or '（无）'}\n\n当前用户查询：{query}"
         return [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},

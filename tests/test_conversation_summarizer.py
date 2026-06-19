@@ -102,6 +102,50 @@ class TestConversationSummarizer:
         assert "A" * 1000 not in user_content
         assert "测试查询" in user_content
 
+    def test_system_prompt_contains_qa_instructions(self, summarizer):
+        """system prompt 包含 Q&A 导向指令, 而非旧的模糊摘要表述
+
+        @param summarizer: ConversationSummarizer 实例
+        @type  summarizer: ConversationSummarizer
+        """
+        messages = summarizer._render_messages(
+            old_summary="已有摘要内容",
+            user_query="测试问题",
+            truncated_reply="测试回答",
+        )
+        system_prompt = messages[0]["content"]
+
+        # （RED 阶段应失败: 当前模板不含 Q&A 关键词）
+        assert any(kw in system_prompt for kw in ["用户提问", "用户询问", "用户关注", "问题"]), \
+            "system prompt 应包含用户相关关键词"
+        assert any(kw in system_prompt for kw in ["回答", "助手介绍"]), \
+            "system prompt 应包含助手回复相关关键词"
+        assert any(kw in system_prompt for kw in ["时间线", "追加", "融合", "已有摘要"]), \
+            "system prompt 应包含多轮融合相关描述"
+        # 确保不只有旧的模糊表述
+        assert not ("概括对话主题" in system_prompt and all(
+            kw not in system_prompt for kw in ["用户提问", "用户询问", "用户关注"]
+        )), "不应只有旧的模糊表述而不含 Q&A 导向内容"
+
+    def test_system_prompt_requires_all_round_questions(self, summarizer):
+        """system prompt 应要求保留所有轮次的用户提问，而非仅本轮"""
+        messages = summarizer._render_messages(
+            old_summary="第1轮：用户询问了K8s自动伸缩。助手介绍了HPA配置。",
+            user_query="HPA的具体参数怎么设置",
+            truncated_reply="可以通过kubectl edit hpa命令修改minReplicas和maxReplicas参数。",
+        )
+        system_prompt = messages[0]["content"]
+
+        # 应包含"所有轮次"或"全过程"等覆盖全部轮次的关键词
+        assert any(kw in system_prompt for kw in ["全过程", "所有轮次", "每个问题", "不得遗漏", "每轮"]), \
+            "system prompt 应要求覆盖全部轮次的用户提问"
+        # 应包含优先保留用户提问的指令
+        assert any(kw in system_prompt for kw in ["用户提问必须保留", "不得丢弃"]), \
+            "system prompt 应要求优先保留用户提问"
+        # 不应有仅关注"本轮"的局限表述
+        assert "本轮对话中提出了哪些问题" not in system_prompt, \
+            "不应只描述本轮对话中的问题"
+
     def test_summarize_returns_text_not_json(self, summarizer, llm_provider):
         """非 JSON 格式输出: mock LLM 返回纯文本摘要，
         验证返回结果是普通文本而非 JSON 结构
