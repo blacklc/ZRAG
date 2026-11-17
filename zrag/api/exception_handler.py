@@ -6,7 +6,7 @@
 使用方式:
     response = api_exception_handler(exc, context)
 
-参考 zonebank 的 exception_handler.py 模式实现。
+沿用内部参考项目的 exception_handler.py 模式实现。
 """
 
 from abc import ABC, abstractmethod

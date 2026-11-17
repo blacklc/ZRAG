@@ -3,12 +3,14 @@
 使用 sentence-transformers 实际加载 BAAI/bge-small-zh-v1.5 模型进行向量化验证。
 注意: 首次运行需要下载模型（约 250MB），后继使用缓存提速。
 """
+import os
+
 import pytest
 
 from zrag.embed.local import BgeSmallEmbedder
 
 
-CACHE_DIR = "/Users/lichen/Documents/workspace/models"
+CACHE_DIR = os.environ.get("MODELS_DIR", os.path.expanduser("~/models"))
 
 
 @pytest.fixture(scope="module")

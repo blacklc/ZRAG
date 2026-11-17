@@ -64,7 +64,7 @@ services:
       - "5965"
     volumes:
       - ./data/pro:/app/data
-      - /Users/lichen/Documents/workspace/models:/app/models:ro
+      - ${MODELS_DIR_HOST:-./models}:/app/models:ro
       - ./logs/pro:/app/logs
     environment:
       - LLM_GATEWAY_URL=${LLM_GATEWAY_URL:-http://host.docker.internal:4000/v1}

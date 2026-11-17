@@ -500,7 +500,7 @@ docker compose build && docker compose up -d             # 全部重建
 | 对外端口 | 8080（避免 80 冲突） |
 | Backend 端口 | 5965（内部 expose） |
 | 启动顺序 | health check + depends_on，Frontend 和 Backend 就绪后 Nginx 才接受请求 |
-| WSGI Server | uWSGI（与 zonebank 一致） |
+| WSGI Server | uWSGI（与内部参考项目一致） |
 | Worker 数量 | 1（个人工具，无并发需求） |
 | Harakiri 超时 | 180 秒（LLM 调用可能慢） |
 | Nginx 代理 | proxy_read_timeout 180s, proxy_connect_timeout 10s |

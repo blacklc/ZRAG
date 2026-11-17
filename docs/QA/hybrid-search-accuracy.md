@@ -405,7 +405,7 @@ materials = [{"doc_title": k, "content": "\n\n".join(v)} for k, v in merged.item
 
 ## 摄入任务后端进度问题
 
-来源：`docs/ingest-backend-issues.md`
+来源：原 `docs/ingest-backend-issues.md`（该文件已归档移除）
 
 ### 问题 A：任务状态切换过早
 

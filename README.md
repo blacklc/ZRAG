@@ -30,6 +30,15 @@
 - **Embedding**: BAAI/bge-small-zh-v1.5（512 维）
 - **LLM**: LiteLLM Gateway（smart-router 负载均衡）
 
+## 文档
+
+- [文档总索引](docs/README.md)
+- [系统架构设计](docs/design.md)
+- [产品需求文档](docs/PRD.md)
+- [实现计划](docs/PLAN.md)
+- [设计对话记录](docs/QA/index.md)
+- [架构图源文件](docs/diagrams/)
+
 ## 目录结构
 
 ```
@@ -48,8 +57,8 @@ ZRAG/
 ├── config/              # YAML 配置文件
 ├── Dockerfile.backend   # 后端容器构建
 ├── Dockerfile.frontend  # 前端容器构建
-├── nginx.conf           # Nginx 反向代理配置
-├── docker-compose.yml   # 三容器编排
+├── frontend/nginx.conf  # Nginx 反向代理配置
+├── docker-compose.yml   # 编排 frontend + backend（Nginx 独立部署）
 ├── entrypoint.sh        # 容器入口脚本
 ├── uwsgi.ini            # uWSGI 配置
 └── requirements.txt     # Python 依赖
@@ -204,10 +213,10 @@ docker compose restart
 
 nginx 为多项目共享网关，**不**包含在 `docker compose up` 的启动序列中。
 
-将 `nginx.conf` 中的 `server` 块复制到 Nginx 配置目录（如 `/etc/nginx/conf.d/zrag.conf`），然后 `nginx -s reload`：
+将 `frontend/nginx.conf` 中的 `server` 块复制到 Nginx 配置目录（如 `/etc/nginx/conf.d/zrag.conf`），然后 `nginx -s reload`：
 
 ```bash
-sudo cp nginx.conf /etc/nginx/conf.d/zrag.conf
+sudo cp frontend/nginx.conf /etc/nginx/conf.d/zrag.conf
 sudo nginx -s reload
 ```
 
@@ -228,9 +237,14 @@ sudo nginx -s reload
 | `GET` | `/v1/conversations/{id}/messages` | 消息列表 |
 | `DELETE` | `/v1/conversations/{id}` | 删除会话（幂等） |
 | `POST` | `/v1/documents/ingest` | 触发文档摄入 |
+| `GET` | `/v1/ingest/{task_id}/status` | 摄入任务状态与进度 |
+| `POST` | `/v1/ingest/{task_id}/cancel` | 取消摄入任务 |
 | `GET` | `/v1/sources` | 来源列表 |
+| `GET` | `/v1/sources/available` | 可用数据源类型列表 |
 | `GET` | `/v1/health/live` | 存活检查 |
 | `GET` | `/v1/health/ready` | 就绪检查 |
+| `GET` | `/v1/schema/` | OpenAPI Schema（仅 DEBUG 模式注册） |
+| `GET` | `/v1/docs/` | Swagger UI（仅 DEBUG 模式注册） |
 
 > **注意**: 生产环境通过 nginx 代理时，实际的 API 路径为 `http://localhost/zrag/v1/...`，nginx 会自动将 `/zrag/` 前缀重写为后端路径。
 > 开发环境直接通过 `http://localhost:5173/v1/...` 访问（Vite 代理自动转发到后端 `:5965`）。
@@ -277,5 +291,11 @@ python3 export_notes.py <task_id> --tag "技术笔记"
 | 数据库 | SQLite (FTS5) + ChromaDB |
 | Embedding | sentence-transformers (bge-small-zh-v1.5, 512d) |
 | LLM Gateway | LiteLLM Gateway |
-| 部署 | Docker 三容器 (Nginx + Frontend + Backend) |
+| 部署 | Docker Compose 双服务 (Frontend + Backend) + 独立 Nginx |
 | 配置 | YAML + 环境变量覆盖 |
+
+## 许可证
+
+本项目采用 MIT 许可证，完整条款见 [LICENSE](LICENSE)。
+
+项目所使用的第三方组件、基础镜像与机器学习模型的许可证清单见 [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md)。其中 uWSGI 以 GPLv2 + linking exception 分发，作为独立进程运行、不修改其源码，因此不影响本项目源码的 MIT 许可；但分发包含 uWSGI 的镜像时需按 GPLv2 提供对应源码的获取方式。Embedding 模型 `BAAI/bge-small-zh-v1.5` 不随仓库或镜像分发，其许可证以 HuggingFace 模型卡为准。

@@ -22,13 +22,13 @@
 - **字段提取成本高**: 日志中携带的 context 信息（request_id、conversation_id、task_id 等）嵌在 message 字符串中，需要在日志处理端用正则提取，易出错且性能差。
 - **机器可读性差**: 后续若引入自动异常检测或告警规则，JSON 结构化日志是基本前提。
 
-## 方案选型讨论: 全量 JSON vs zonebank 混合方案
+## 方案选型讨论: 全量 JSON vs 内部参考项目混合方案
 
 ### 方案 A: 全量 JSON
 
 所有日志（包含简单的一行信息）统一输出为 JSON 串。每个日志记录包含固定字段（timestamp、level、logger、thread、funcName、lineno、message）和按需透出的 extra fields。
 
-### 方案 B: zonebank 混合方案（参考 zonebank 项目）
+### 方案 B: 内部参考项目混合方案（沿用该项目）
 
 简单日志保持纯文本，仅在需要携带结构化数据时使用 JSON。message 字段固定位置注入 key=value 对。
 

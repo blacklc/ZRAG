@@ -103,7 +103,9 @@ USE_TZ = True
 #   1. console — 流式输出到 stdout/stderr (供 Docker json-file driver 捕获)
 #   2. file    — 按天轮转文件输出, 保留 7 天, UTF-8 编码
 #
-# 格式: 时间戳 [级别] 线程ID 函数名:行号 消息内容
+# 格式: JSON 单行 (zrag.log_formatter.JsonFormatter)
+#       固定字段: timestamp / level / thread / logger / function / line / message
+#       extra= 传入的自定义字段提升到 JSON 顶层, 异常时追加 traceback 字段
 # =============================================================================
 LOGGING = {
     'version': 1,

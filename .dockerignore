@@ -43,3 +43,10 @@ Dockerfile*
 # Documentation
 docs/
 *.md
+
+# 补充排除
+logs/
+*.log.*
+.venv_test/
+tests/
+.mcp.json

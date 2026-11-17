@@ -377,7 +377,7 @@
 | 115 | ConversationSummarizer 类 — 增量压缩 + 输出清理前缀 + max_chars 截断 | AFK | 114, 111 |
 | 116 | CompressService 异步压缩调度 — 复用 ZRAG_INGEST_EXECUTOR + 独立 SqliteStore + 静默失败 | AFK | 115 |
 | 117 | views.py 多轮对话全流程集成 — create/add_message 读 summary + 触发异步压缩 | AFK | 110, 111, 113, 116 |
-| 118 | Ollama 基础设施 — Docker 独立部署 + Qwen3.5-9B 下载 + LiteLLM Gateway 注册 | HITL | 无 |
+| 118 | Ollama 基础设施 — Docker 独立部署 + Qwen3-4B-Instruct-2507 下载 + LiteLLM Gateway 注册 | HITL | 无 |
 | 119 | 摘要注入 LLM 生成阶段 + 历史缩减 — LIMIT 10→3，summary 作为第 2 条 system 消息 | AFK | 117 |
 
 ### 多轮对话优化切片依赖图
@@ -402,7 +402,7 @@
 | 115 | Summarizer | `compress.j2` → `ConversationSummarizer` → 输出清理 → 单元测试 |
 | 116 | 异步调度 | `CompressService` → `ZRAG_INGEST_EXECUTOR` → 独立 SqliteStore → 单元测试 |
 | 117 | API 集成 | `views.py` create/add_message → 读 summary → 触发压缩 → 集成测试（3 轮对话） |
-| 118 | 模型部署 | Docker → Ollama → Qwen3.5-9B → LiteLLM Gateway 配置 → 连通性验证 |
+| 118 | 模型部署 | Docker → Ollama → Qwen3-4B-Instruct-2507 → LiteLLM Gateway 配置 → 连通性验证 |
 | 119 | 摘要注入生成 | `views.py` add_message() — summary 作为第 2 条 system 消息 → `LIMIT 10` 改为 `LIMIT 3` → 全链路验证 |
 
 ### 摘要压缩 prompt 大小动态限制（#120-#123）

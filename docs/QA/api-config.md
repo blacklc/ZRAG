@@ -333,7 +333,7 @@ SSE（Server-Sent Events）是 HTTP 长连接，服务器逐块推送数据、�
 
 **技术栈变更**: FastAPI → **Django REST Framework**
 
-**路由风格**: ViewSet + re_path，参考 zonebank 模式
+**路由风格**: ViewSet + re_path，沿用内部参考项目模式
 
 **API 版本化**: URL 加 `v1/` 前缀
 

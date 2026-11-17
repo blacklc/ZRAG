@@ -1,0 +1,53 @@
+# ============================================================
+# 换行符统一
+# ============================================================
+# 默认由 git 自动识别文本文件, 并统一强制为 LF。
+# 这样可以避免 Windows 贡献者提交时引入 CRLF, 导致整文件级别的无意义 diff。
+* text=auto eol=lf
+
+# 明确指定为 LF 的文件类型, 覆盖项目实际使用的源码、配置、模板与文档格式
+*.py    text eol=lf
+*.js    text eol=lf
+*.ts    text eol=lf
+*.vue   text eol=lf
+*.md    text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.json  text eol=lf
+*.sh    text eol=lf
+*.ini   text eol=lf
+# Jinja2 模板 (zrag/prompts/*.j2) 属于文本资源, 统一使用 LF 便于 diff 审阅
+*.j2    text eol=lf
+
+# ============================================================
+# 二进制文件
+# ============================================================
+# 二进制资源不做换行转换, 避免 git 将其误判为文本而破坏文件内容。
+# 当前仓库实际存在的二进制类型为 .drawio (docs/diagrams/ 下的架构图源文件)。
+*.png    binary
+*.jpg    binary
+*.ico    binary
+*.drawio binary
+*.pdf    binary
+
+# ============================================================
+# GitHub Linguist 语言统计规则
+# ============================================================
+# 文档与 Claude Code 规则文件不计入语言构成统计,
+# 避免仓库首页的语言占比被大量 Markdown 文档稀释。
+docs/**    linguist-documentation
+.claude/** linguist-documentation
+
+# drawio 架构图源文件不参与语言识别
+*.drawio   linguist-detectable=false
+
+# 锁文件由包管理器生成, 不计入语言统计, 避免影响仓库语言占比
+frontend/package-lock.json linguist-generated=true
+
+# ============================================================
+# 可执行脚本
+# ============================================================
+# 换行由上方 *.sh 规则保证。
+# 可执行位由 git index 的文件模式 (100755) 记录, gitattributes 只负责换行转换。
+# entrypoint.sh 是进入后端镜像后直接运行的入口脚本, 单独显式声明以免规则调整时被遗漏。
+entrypoint.sh text eol=lf

@@ -25,7 +25,7 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 - **会话管理**：多轮对话持久化，支持切换、继续和删除历史对话；对话摘要逐轮自动更新
 - **Web UI**：Apple 风格聊天界面，深色/浅色模式切换，Markdown 渲染，代码高亮
 - **数据质量优化**：统一 chunk 大小为 1000 字符（适配 BGE-small 512 token 限制）、标签元数据透传 FTS5 索引、代码围栏标题误识别修复、Unicode NFC 规范化
-- **智能查询改写**：本地部署的小模型（Qwen3.5-9B）将口语化查询改写为结构化搜索表达（关键词 + 精炼查询），分别流入关键词和语义两条检索路径，节省 API 消费
+- **智能查询改写**：本地部署的小模型（Qwen3-4B-Instruct-2507）将口语化查询改写为结构化搜索表达（关键词 + 精炼查询），分别流入关键词和语义两条检索路径，节省 API 消费
 - **异步对话压缩**：每轮回答后后台异步将 Q&A 压缩为摘要，不阻塞用户请求，摘要持久化到数据库
 
 ## 用户故事
@@ -74,7 +74,7 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 - 前端：Vue 3 + Vite + Tailwind CSS（Apple 风格 UI），与后端分离
 - WSGI Server：uWSGI（1 worker，180 秒 harakiri 超时）
 - LLM 网关：LiteLLM Gateway（自托管，OpenAI 兼容端点 localhost:4000/v1），统一管理云 API 模型和本地 Ollama 模型的路由与监控
-- 本地模型推理：Ollama（独立 Docker 容器，宿主机部署，Qwen3.5-9B Q4_K_M 量化约 6GB，CPU 推理）
+- 本地模型推理：Ollama（独立 Docker 容器，宿主机部署，Qwen3-4B-Instruct-2507 Q4_K_M 量化约 6GB，CPU 推理）
 - 规模：个人使用，< 1000 篇文档，单用户
 
 ### 上下文感知检索（多轮对话优化）
@@ -227,15 +227,15 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 ### LLM Provider
 
 - LLMProvider 抽象基类：chat(messages) → str、chat_stream(messages) → Iterator[str]（Phase 2）
-- LLMGatewayProvider：通过 OpenAI SDK 调用 LiteLLM Gateway。内部代码不变，仅调用方根据用途传入不同的 model 参数（`smart-router` 用于 Chat 生成，`ollama/qwen3.5:9b` 用于查询改写和压缩）
+- LLMGatewayProvider：通过 OpenAI SDK 调用 LiteLLM Gateway。内部代码不变，仅调用方根据用途传入不同的 model 参数（`smart-router` 用于 Chat 生成，`qwen3:4b-instruct-2507-q4_K_M` 用于查询改写和压缩）
 - 错误处理策略：有回调 → 通知回调 + 不抛异常；无回调 → 抛 BaseZragException
 - 超时时间：200 秒（Chat 生成）、120 秒（查询改写/压缩）
-- 可用模型（通过 LiteLLM Gateway 配置）：smart-router（云 API 负载均衡组）、ollama/qwen3.5:9b（本地 Ollama）
+- 可用模型（通过 LiteLLM Gateway 配置）：smart-router（云 API 负载均衡组）、qwen3:4b-instruct-2507-q4_K_M（本地 Ollama）
 
 ### API 层
 
 - 自定义 APIResponse 包装器：Message + Data + RequestID + X-Request-ID 响应头
-- 异常体系：BaseZragException + Handler Registry（参照 zonebank 模式）
+- 异常体系：BaseZragException + Handler Registry（沿用内部参考项目模式）
 - 异常类型：UnauthorizedException(401)、NotFoundException(404)、RetrievalException(500)、LLMCallException(502)、IngestionException(500)
 - 认证：API Key，Authorization Header，全部端点统一要求（健康检查除外）
 - CSRF 已禁用，CORS 通过 django-cors-headers（Phase 1 全放通）
@@ -324,7 +324,7 @@ ZRAG 是一个**本地优先的个人 RAG 知识库系统**。用户将文档导
 - Frontend：内部 80 端口，仅 expose
 - Backend：内部 5965 端口，仅 expose
 - 数据持久化：./data/pro:/app/data（zrag.db + chroma_db + django.db）
-- 模型挂载：/Users/lichen/Documents/workspace/models:/app/models:ro（只读，绝对路径，仅 BGE 用）
+- 模型挂载：${MODELS_DIR_HOST:-./models}:/app/models:ro（只读，仅 BGE 用）
 - 日志持久化：./logs/pro:/app/log（业务日志）
 - 环境变量：.env 文件 + docker-compose ${VAR} 引用
 - entrypoint.sh：migrate → collectstatic → uwsgi（建表由 AppConfig.ready() 自动执行 `CREATE TABLE IF NOT EXISTS`，Column migration 由 SqliteStore._migrate() 执行）
@@ -414,12 +414,12 @@ CREATE TABLE ingest_tasks (id TEXT PK, task_type TEXT NOT NULL, status TEXT NOT 
 
 ## 补充说明
 
-- 参考项目：zonebank（DRF 模式、异常处理、uWSGI 配置）
-- LiteLLM Gateway 配置位于 ~/.claude/litellm/config.yaml，已配置 smart-router 负载均衡
+- 参考项目：内部参考项目（DRF 模式、异常处理、uWSGI 配置）
+- LiteLLM Gateway 配置位于 ~/.config/litellm/config.yaml，已配置 smart-router 负载均衡
 - LiteLLM Gateway 配置中新增 `qwen3:4b-instruct-2507-q4_K_M` 模型指向本地 Ollama（api_base: http://host.docker.internal:11434）
 - Ollama 独立 Docker 容器部署（docker run），模型文件约 6GB 持久化在 ollama_data volume 中。更换电脑时拷贝 volume 数据即可
 - 整个项目在同一 Git 仓库中（zrag/ 后端 + frontend/ 前端）
-- 全部模块设计方案及各模块代码片段记录于 docs/QA/（Q0-Q35）
+- 全部模块设计方案及各模块代码片段记录于 docs/QA/（Q0-Q38）
 - 全程无 LangChain/LlamaIndex/FastAPI/手写 BM25/Jinja2 服务端渲染
 - Prompt 模板引擎：Jinja2（zrag/prompts/ 目录），支持条件渲染和格式化
 - 混合检索准确度优化设计讨论记录于 docs/QA/hybrid-search-accuracy.md

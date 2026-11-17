@@ -151,11 +151,11 @@
 └──────────┘  └──────────────┘  └──────────────────┘
 ```
 
-**znginx 为何独立部署**。在设计之初，曾考虑将 nginx 作为 docker-compose 的一部分与 frontend 和 backend 统一管理。但从实际使用场景来看，nginx 作为反向代理通常需要服务于同一宿主机上的多个项目（例如 zonebank 的内网穿透、其他内部工具等）。将 nginx 放入 ZRAG 的 docker-compose 中意味着 nginx 的生命周期与 ZRAG 项目绑定——ZRAG 的重启或下线会波及同一 nginx 代理的其他项目。因此，将 znginx 设计为独立容器，由宿主机上的独立脚本管理其生命周期，ZRAG 仅通过约定的路径前缀（`/zrag/*`）接入反向代理。这样 znginx 可以同时代理多个项目，互不干扰。
+**znginx 为何独立部署**。在设计之初，曾考虑将 nginx 作为 docker-compose 的一部分与 frontend 和 backend 统一管理。但从实际使用场景来看，nginx 作为反向代理通常需要服务于同一宿主机上的多个项目（例如内部参考项目的内网穿透、其他内部工具等）。将 nginx 放入 ZRAG 的 docker-compose 中意味着 nginx 的生命周期与 ZRAG 项目绑定——ZRAG 的重启或下线会波及同一 nginx 代理的其他项目。因此，将 znginx 设计为独立容器，由宿主机上的独立脚本管理其生命周期，ZRAG 仅通过约定的路径前缀（`/zrag/*`）接入反向代理。这样 znginx 可以同时代理多个项目，互不干扰。
 
 **backend 如何与 LiteLLM Gateway 通信**。Backend 不直接调用各 LLM 厂商的 API，而是通过 OpenAI SDK 以标准的 OpenAI 兼容接口向 LiteLLM Gateway 发送请求。LiteLLM Gateway 运行在宿主机上（通过 `host.docker.internal:4000` 从容器内访问），负责统一的模型路由、负载均衡和 API Key 管理。Backend 只需要指定一个模型名（如 `smart-router`、`glm-5` 或 `deepseek-v4-pro`），Gateway 会将其映射到实际的模型端点。这种设计使得切换底层 LLM 模型或增加新的模型厂商时，Backend 代码完全不需要修改——所有模型路由变更仅在 Gateway 的 YAML 配置中完成。
 
-> Tips: LiteLLM Gateway 的配置位于 `~/.claude/litellm/config.yaml`，其中已配置了 `smart-router` 负载均衡组，可以根据各模型的实时可用性和延迟自动选择最优模型。
+> Tips: LiteLLM Gateway 的配置位于 `~/.config/litellm/config.yaml`，其中已配置了 `smart-router` 负载均衡组，可以根据各模型的实时可用性和延迟自动选择最优模型。
 
 Backend 和 Frontend 作为两个独立的容器运行，通过 docker-compose 统一管理。Frontend 容器内使用 nginx:alpine 提供编译后的 Vue 静态资源，内部监听 80 端口；Backend 容器内运行 uWSGI + Django，内部监听 5965 端口。znginx 根据请求路径前缀将 `/zrag/*` 的 API 请求代理到 Backend，将根路径 `/` 的静态资源请求代理到 Frontend。
 
@@ -241,7 +241,7 @@ class IngestionPipeline:
 
 在确定了设计原则之后，需要对各层的具体技术栈做出选择。以下逐项说明每个技术选型背后的考量。
 
-**Django REST Framework + uWSGI**。API 框架的选择受到了参考项目 zonebank 实践经验的直接影响。zonebank 在 DRF + uWSGI 的组合上已经验证了稳定性和开发效率。DRF 提供了 ViewSet 路由、Serializer 校验、认证类和异常处理等开箱即用的基础设施——这些能力如果换用 FastAPI 或 Flask 需要额外引入多个扩展库才能实现同等的开发体验。配合 `drf-spectacular` 可以基于代码中的装饰器注解自动生成 OpenAPI 文档（Swagger UI），在开发阶段极大地方便了 API 的手动测试。uWSGI 作为 WSGI Server 在单进程/少进程场景下性能充裕、配置简洁，且与 Django 的集成非常成熟。这一组合使得 ZRAG 可以复用 zonebank 中经过验证的异常处理体系（Handler Registry 模式）、中间件设计（RequestIDMiddleware）和配置管理思路，减少从零摸索的成本。
+**Django REST Framework + uWSGI**。API 框架的选择受到了内部参考项目实践经验的直接影响。该项目在 DRF + uWSGI 的组合上已经验证了稳定性和开发效率。DRF 提供了 ViewSet 路由、Serializer 校验、认证类和异常处理等开箱即用的基础设施——这些能力如果换用 FastAPI 或 Flask 需要额外引入多个扩展库才能实现同等的开发体验。配合 `drf-spectacular` 可以基于代码中的装饰器注解自动生成 OpenAPI 文档（Swagger UI），在开发阶段极大地方便了 API 的手动测试。uWSGI 作为 WSGI Server 在单进程/少进程场景下性能充裕、配置简洁，且与 Django 的集成非常成熟。这一组合使得 ZRAG 可以复用内部参考项目中经过验证的异常处理体系（Handler Registry 模式）、中间件设计（RequestIDMiddleware）和配置管理思路，减少从零摸索的成本。
 
 **SQLite + ChromaDB 双库**。存储层的设计出发点是"嵌入免部署"——对于个人项目，如果数据库需要单独安装和启动一个服务进程（如 PostgreSQL Server、Milvus 集群），运维复杂度会显著增加。SQLite 和 ChromaDB（PersistentClient 模式）都是嵌入式数据库：前者是进程内文件数据库，将全部数据存储在一个 `.db` 文件中；后者将向量数据持久化到本地目录。它们都不需要独立的服务进程，通过文件系统就可完成数据的持久化和容器间卷挂载共享。SQLite 负责结构化数据和全文检索，通过内置的 FTS5 扩展提供 BM25 评分——零额外依赖即可实现高质量的关键词检索，无需手写 BM25 算法或引入 Elasticsearch。ChromaDB 负责向量存储和 Cosine 相似度检索，作为嵌入式向量数据库的典型代表，其 Python API 简洁直观，`add()`、`similarity_search()`、`delete_by_source()` 等方法覆盖了 ZRAG 所需的全部向量操作。两者在功能上互补：SQLite 提供精确的结构化查询和关键词匹配，ChromaDB 提供模糊的语义检索。
 
@@ -2237,7 +2237,7 @@ def create_llm(config: dict) -> LLMProvider:
 
 **为何选择 LiteLLM Gateway 而非直接调用模型 API**。如果 Backend 代码直接集成各家模型厂商的 SDK——DeepSeek 用 DeepSeek SDK、GLM 用智谱 SDK、Kimi 用 Moonshot SDK——那么 API Key 管理、模型切换和负载均衡的逻辑将散布在代码各处，每接入一个新厂商就需要编写一套新的 SDK 调用代码，维护成本随模型数量线性增长。LiteLLM Gateway 从三个层面解决了这个问题。第一，Gateway 以 OpenAI 兼容接口统一暴露多种模型——无论后端实际模型是 DeepSeek、GLM 还是 Kimi，Backend 只需要使用 OpenAI SDK 通过单一基地址（`http://localhost:4000/v1`）发送 `chat/completions` 请求，Gateway 内部完成协议转换。第二，Gateway 内置 smart-router 负载均衡和故障转移——配置一个 `smart-router` 虚拟模型名，Gateway 会根据各底层模型的实时可用性和延迟自动选择最优模型路由请求，某一模型不可用时自动 fallback 到备用模型，Backend 代码无感知。第三，Gateway 统一管理 API Key 和成本追踪——所有厂商的 API Key 存放在 Gateway 的 YAML 配置文件中，Backend 和前端均不接触任何 API Key，消除了 Key 泄漏的风险面。Gateway 以独立进程形式运行在宿主机上，ZRAG 容器通过 `host.docker.internal:4000` 访问——Gateway 的启停和升级不影响 ZRAG 容器的生命周期。
 
-> 注意：LiteLLM Gateway 的配置位于宿主机 `~/.claude/litellm/config.yaml`，其中已配置了 `smart-router` 负载均衡组（含 glm-5、kimi-k2.6、deepseek-v4-flash、minimax-m2.7、deepseek-v4-pro 等模型）。Backend 仅需指定模型名为 `smart-router`，Gateway 自动路由到最优可用模型。
+> 注意：LiteLLM Gateway 的配置位于宿主机 `~/.config/litellm/config.yaml`，其中已配置了 `smart-router` 负载均衡组（含 glm-5、kimi-k2.6、deepseek-v4-flash、minimax-m2.7、deepseek-v4-pro 等模型）。Backend 仅需指定模型名为 `smart-router`，Gateway 自动路由到最优可用模型。
 
 **为何 LLM 错误处理采用双模式（on_error 回调 vs 抛异常）**。LLM 调用可能在两种截然不同的上下文中被使用：Web API 请求（ViewSet 中处理 HTTP 请求）和 CLI 命令（命令行工具直接调用）。这两种上下文对错误处理的需求不同。在 Web API 场景中，调用方（ViewSet）需要严格控制 HTTP 响应的格式——即使 LLM 调用失败，也必须返回一个合法的 JSON 响应体（含 `code`、`message` 和 `request_id` 字段），而不是让框架层捕获一个裸异常后返回格式不一致的 500 页面。此时调用方传入 `on_error` 回调，LLM 调用失败时 `chat()` 返回 `None`（不抛异常），ViewSet 检测到 `None` 返回值后自行构建包含错误信息的标准 API 响应。在 CLI 场景中，调用方（CLI 命令）需要立即感知错误并终止执行——如果 `chat()` 返回 `None`，CLI 需要额外编写一层判断逻辑来将 `None` 解释为失败，代码冗余且语义不直观。此时调用方不传 `on_error`，LLM 调用失败时直接抛出 `LLMCallException`，CLI 在最外层用 try/except 捕获后打印错误信息并退出。双模式设计让调用方可以按自身需求选择错误传播方式——需要控制响应格式的场景选回调模式，需要简单直接报错的场景选异常模式——同一个 `LLMProvider` 实现同时满足两种需求，不给任何一方增加无谓的适配代码。
 
@@ -2284,34 +2284,42 @@ llm:
 
 模型路由通过 LiteLLM Gateway 的 `smart-router` 配置实现负载均衡，可用的底层模型包括 glm-5、kimi-k2.6、deepseek-v4-flash、minimax-m2.7、deepseek-v4-pro 等。Backend 不需要知道这些底层模型的存在——它只请求 `smart-router`，由 Gateway 根据各模型的实时状态自动选择最优路由。
 
-### 本地 LLM 部署（Ollama + Qwen3.5-9B）
+### 本地 LLM 部署（Ollama + Qwen3-4B-Instruct-2507）
 
 查询改写（QueryRewriter）和对话压缩（ConversationSummarizer）这类高频率、低语义难度的任务，从 API 模型切换到本地部署的小模型，既可以节省 API 消费，又可以获得更稳定的延迟（本地无排队）。
 
-**为何选择 Ollama 作为推理引擎**。Ollama 基于 llama.cpp 构建，是最简化的本地 LLM 部署方案——一行命令下载量化模型并启动 OpenAI 兼容的 HTTP API。它对 CPU 推理做了深度优化（Q4_K_M 量化格式、内存映射加载），对 macOS 和 Linux 均有良好支持。虽然 vLLM 在 GPU 高并发场景下吞吐量更高（连续批处理），但 ZRAG 是单用户、CPU 推理场景，Ollama 的简洁性远超 vLLM 的复杂性收益。且本地模型和其他云 API 模型均通过 LiteLLM Gateway 统一路由——Gateway 中新增 `ollama/qwen3.5:9b` 模型定义，指向 Ollama 的 `/v1` 端点，Backend 代码只需切换 `model` 参数即可在 API 模型和本地模型间切换。
+**为何选择 Ollama 作为推理引擎**。Ollama 基于 llama.cpp 构建，是最简化的本地 LLM 部署方案——一行命令下载量化模型并启动 OpenAI 兼容的 HTTP API。它对 CPU 推理做了深度优化（Q4_K_M 量化格式、内存映射加载），对 macOS 和 Linux 均有良好支持。虽然 vLLM 在 GPU 高并发场景下吞吐量更高（连续批处理），但 ZRAG 是单用户、CPU 推理场景，Ollama 的简洁性远超 vLLM 的复杂性收益。且本地模型和其他云 API 模型均通过 LiteLLM Gateway 统一路由——Gateway 中新增 `qwen3:4b-instruct-2507-q4_K_M` 模型定义，指向 Ollama 的 `/v1` 端点，Backend 代码只需切换 `model` 参数即可在 API 模型和本地模型间切换。
 
-**为何选择 Qwen3.5-9B**。模型选型过程中评估了多个方案。Qwen2.5-7B-Instruct（7B 参数）在中文指代消解和 JSON 输出约束上均有可靠表现，CPU Q4 推理约 4-7s，是 7B 级别的最优选择。Qwen3.5 系列跳过了 7B-8B 区间——Qwen3.5-4B（5B 参数）参数偏少，中文指代消解质量存疑；Qwen3.5-9B（10B 参数）参数偏多但指令跟随能力更强（IFEval 91.5 分，BFCL-V4 66.1 分显示可靠的 JSON 输出能力）。Qwen3.5-9B-Base 为纯基座模型，未经指令微调，无法直接用于对话——Base 模型会将系统 prompt 视为待续写的文本而非指令。最终选择 Qwen3.5-9B，权衡多出的 3-4s CPU 延迟换取更可靠的中文语义理解、指令跟随和 JSON 输出质量。模型 Q4_K_M 量化后约 6GB 磁盘，CPU 推理延迟约 7-11s/次。
+**为何选择 Qwen3-4B-Instruct-2507**。查询改写和对话压缩都是高频、短输入、低语义难度的任务：每次用户提问都会触发一次改写调用，每轮对话结束后都会触发一次压缩调用。这类任务对模型的绝对能力要求低于 Chat 生成，但对延迟和调用成本敏感——如果复用云端 API 模型，调用量会随对话频率线性增长，且延迟受 Gateway 排队影响。因此设计上把这类任务交给本地部署的小模型：本地推理无排队、无 API 计费，代价是模型能力弱于云端大模型，但改写和压缩只需稳定的指令跟随与 JSON 输出，这一取舍成立。具体到模型选型，当前实现以配置文件为准：`config/llm.yaml` 中 `rewriter_model` 的默认值为 `qwen3:4b-instruct-2507-q4_K_M`，即 Qwen3-4B-Instruct-2507 的 Q4_K_M 量化版本，指令微调保证了它可以直接消费 system prompt 并按要求输出结构化结果；4B 量化模型的体积和算力需求适合单用户、无 GPU 的本地 CPU 环境常驻运行。该模型的上下文窗口为 32,768 tokens，由 `rewriter_model_context_window` 显式声明（改写 prompt 需要同时容纳对话摘要和当前查询）；配套的请求超时为 200 秒，与 Gateway 调用共享同一 timeout 配置。早期设计讨论中曾评估过其他本地模型方案，相关记录已不适用于当前实现；模型名称、上下文窗口和超时均以 `config/llm.yaml` 为唯一事实来源，更换模型时只需调整配置项，无需修改 Backend 代码。
 
 **为何通过 LiteLLM Gateway 统一路由而非跳过 Gateway 直连 Ollama**。如果 QueryRewriter 和 ConversationSummarizer 直连 Ollama（`base_url=http://host.docker.internal:11434/v1`），则这些调用将游离于 LiteLLM Gateway 的监控、日志和告警体系之外，形成监控真空。所有 LLM 调用——无论本地还是云端——统一经 Gateway 路由，可获得统一维度的可观测性（调用量、延迟分布、失败率）。Gateway 中本地模型的 API base 指向 `http://host.docker.internal:11434`（Ollama 和 LiteLLM 不在同一 Docker compose 网络，通过宿主机端口通信）。
 
-**Ollama 部署方式**。Ollama 与 LiteLLM 属于同一级别的独立基础设施——不入 ZRAG 的 `docker-compose.yml`，独立 Docker 容器部署（`docker run -d --name ollama -p 11434:11434 -v ollama_data:/root/.ollama -e OLLAMA_KEEP_ALIVE=24h --memory="10g" ollama/ollama:0.9.0`）。`OLLAMA_KEEP_ALIVE=24h` 使模型加载后在内存中保持 24 小时，避免每次请求冷启动重新加载 6GB 权重（耗时数十秒）。内存限制 10GB：模型 6GB + 推理时 KV cache 等额外开销。模型文件持久化在 Docker volume `ollama_data` 中，更换电脑时拷贝 volume 即可。
+**Ollama 部署方式**。Ollama 与 LiteLLM 属于同一级别的独立基础设施——不入 ZRAG 的 `docker-compose.yml`，独立 Docker 容器部署（`docker run -d --name ollama -p 11434:11434 -v ollama_data:/root/.ollama -e OLLAMA_KEEP_ALIVE=24h --memory="10g" ollama/ollama:0.9.0`）。`OLLAMA_KEEP_ALIVE=24h` 使模型加载后在内存中保持 24 小时，避免每次请求冷启动重新加载模型权重（耗时数十秒）。内存限制 10GB 用于覆盖模型权重与推理时 KV cache 等额外开销。模型文件持久化在 Docker volume `ollama_data` 中，更换电脑时拷贝 volume 即可。
 
 **BGE embedding 模型不受 Ollama 管理**。BGE 和 LLM 是两类完全不同的模型。BGE 属于 embedding 模型（encoder-only 架构），输入文字输出固定维度向量，由 `SentenceTransformer` 库加载。LLM 属于生成模型（decoder-only 架构），输入文字逐 token 输出新文字，由 Ollama/llama.cpp 加载。两者在架构、输入输出、推理库上完全不同，不存在"统一管理"的必要。BGE 继续通过 `SentenceTransformer` 在 `zrag/embed/local.py` 中进程内加载，保持零网络开销的毫秒级响应。
 
-**配置文件更新**。在 `config/llm.yaml` 的 `gateway` 段下新增 `rewriter_model` 字段，指定本地模型名称。`base_url` 不变（统一指向 LiteLLM Gateway），仅 `model` 参数不同实现路由区分：
+**配置文件更新**。在 `config/llm.yaml` 的 `gateway` 段下新增 `rewriter_model` 与 `rewriter_model_context_window` 字段，分别指定本地模型名称及其上下文窗口。`base_url` 不变（统一指向 LiteLLM Gateway），仅 `model` 参数不同实现路由区分：
 
 ```yaml
+# config/llm.yaml
 llm:
+  provider: "gateway"
+  timeout: 200
   gateway:
     base_url: "${LLM_GATEWAY_URL:-http://localhost:4000/v1}"
     api_key: "${LITELLM_MASTER_KEY:-sk-dummy}"
     model: "smart-router"
-    rewriter_model: "${REWRITER_LLM_MODEL:-ollama/qwen3.5:9b}"
+    rewriter_model: "${REWRITER_LLM_MODEL:-qwen3:4b-instruct-2507-q4_K_M}"
+    rewriter_model_context_window: 32768  # Qwen3-4B-Instruct-2507 上下文窗口 (tokens)
 ```
 
-同时 `config/retrieval.yaml` 中新增 `summary_max_chars: 200` 控制摘要最大长度。
+同时 `config/retrieval.yaml` 中新增 `summary_max_chars: 500` 控制摘要最大长度。
 
 **降级策略**。Ollama 容器不可用时（宕机、冷启动中），QueryRewriter 调用失败。此时 `retriever.py` 的 `hybrid_search()` 中 catch 异常，降级为使用原始 query 继续检索。回答请求不中断，仅检索质量可能因缺少改写而下降。运维层面依赖 LiteLLM Gateway 的监控告警发现本地模型异常。
+
+---
+
+# 8. API 设计
 
 ## 8.1 统一响应格式
 
@@ -2323,7 +2331,7 @@ DRF 原生的 `Response` 类对响应体结构不做约束——开发者可以�
 
 ### 设计决策：为何用 Message 而非 message（大写 M）
 
-字段名采用大写 `Message`，是参考 zonebank 项目的既有惯例。保持同一团队多个项目间的响应格式一致，降低前后端对接的心智成本。
+字段名采用大写 `Message`，是沿用内部参考项目的既有惯例。保持同一团队多个项目间的响应格式一致，降低前后端对接的心智成本。
 
 ```python
 class APIResponse(Response):
@@ -2425,7 +2433,7 @@ class APIKeyAuthentication(BaseAuthentication):
 
 ## 8.3 异常处理体系
 
-异常处理采用 **Handler Registry** 模式（参考 zonebank 设计），整体流程如下：
+异常处理采用 **Handler Registry** 模式（沿用内部参考项目设计），整体流程如下：
 
 ```
 异常抛出
@@ -3011,12 +3019,12 @@ YAML 配置文件作为代码的一部分打包在容器镜像中（通过 `COPY
 
 | 配置文件 | 关键配置项 |
 |----------|-----------|
-| `llm.yaml` | gateway base_url, model, api_key; timeout |
-| `embedding.yaml` | model_name, cache_dir |
-| `ingest.yaml` | batch_size |
-| `api.yaml` | key, throttle_rates (chat, ingest) |
+| `llm.yaml` | provider, timeout; gateway: base_url, api_key, model, rewriter_model, rewriter_model_context_window |
+| `embedding.yaml` | model_name, cache_dir, device |
+| `ingest.yaml` | batch_size, task_pool_size |
+| `api.yaml` | key, query_max_length, throttle_rates (chat, ingest) |
 | `storage.yaml` | sqlite_path, chroma_path |
-| `retrieval.yaml` | top_k |
+| `retrieval.yaml` | top_k, rrf_k, rrf_weights (vector, keyword), summary_max_chars, history_max_messages |
 
 Django 配置加载：
 
@@ -3034,7 +3042,7 @@ ZRAG_RETRIEVAL = _config.get("retrieval", {})
 
 # 12. 日志体系
 
-日志采用级别分流策略，使用自定义 `ExactLevelFilter` 将不同级别的日志写入独立文件。
+ZRAG 的日志体系由两个相互独立的维度组成：按级别分流的文件输出策略，以及全量 JSON 的日志格式。前者决定一条日志写入哪个文件，由 handler 上的 `ExactLevelFilter` 完成；后者决定每条日志长什么样，由 formatter 层的 `JsonFormatter` 完成。两者互不耦合，可以分别演进。
 
 ### 为何级别分流（ExactLevelFilter）而非所有日志写一个文件
 
@@ -3058,65 +3066,116 @@ Python logging 模块的默认行为是：handler 设置的 `level` 是**包容�
 
 这种设计的逻辑是：当前操作的完成时间戳就是下一个操作开始时间戳的近似值——两次相邻完成日志的时间差就是上一个操作的耗时。例如：
 
-```
-2026-06-09 10:30:01.234 [req=xxx] 检索完成 results_count=5
-2026-06-09 10:30:04.567 [req=xxx] LLM 调用完成 reply_len=342
+```json
+{"timestamp":"2026-06-09T10:30:01.234567+08:00","level":"INFO","message":"检索完成","request_id":"xxx","results_count":5}
+{"timestamp":"2026-06-09T10:30:04.567890+08:00","level":"INFO","message":"LLM 调用完成","request_id":"xxx","reply_len":342}
 ```
 
 检索耗时 = 检索完成时间 - 请求到达时间（可从 uwsgi-req.log 获取），LLM 调用耗时 = LLM 调用完成时间 - 检索完成时间 = 10:30:04.567 - 10:30:01.234 = 3.333 秒。不需要额外的耗时日志来记录这 3.333 秒——两次完成日志的时间差已经精确提供了这个信息。
 
 如果记录开始时间（如"LLM 调用开始"），日志量翻倍（每个操作需要"开始"和"完成"两条日志），但实际获得的信息增量很小——耗时仍然需要用"完成 - 开始"来计算。只记录完成时间使日志更加简洁，关键信息（哪个操作完成了、在什么时候完成的、结果如何）不丢失。
 
-### 为何使用 [req=xxx] 前缀而非结构化 JSON 日志
+### 为何选择全量 JSON 日志而非 [req=xxx] 前缀文本
 
-全链路追踪要求各层日志能够通过 Trace ID 关联。实现这一关联有两种方式：在每条日志的文本中加入 `[req=xxx]` 前缀，或输出结构化 JSON 格式的日志（每行一个 JSON 对象，包含 `request_id` 字段）。
+全链路追踪要求各层日志能够通过 Trace ID 关联。实现这一关联有两条路线：在每条日志的文本中拼接 `[req=xxx]` 前缀，或让每条日志输出为一行 JSON 对象并携带 `request_id` 字段。ZRAG 早期采用的是前者，但项目的运行方式随后发生了变化——容器化部署成为标准运行方式，日志的消费方不再是终端前的人，而是日志采集系统。这一变化使原有结论不再成立，日志格式随之改为全量 JSON。
 
-结构化 JSON 日志（如使用 `python-json-logger` 库输出 `{"timestamp": "...", "level": "INFO", "request_id": "xxx", "message": "..."}` ）的优点是机器可解析、便于接入 ELK（Elasticsearch + Logstash + Kibana）等日志收集分析系统。但 ZRAG 作为个人项目，没有 ELK 集群，也没有日志聚合和分析的需求。排查问题时唯一需要的操作是：根据 Trace ID 在日志文件中 grep 搜索，查看该请求的全部日志记录。
+容器化部署后，console handler 的输出写入 stdout/stderr，由 Docker 的 json-file driver 采集并转发到日志系统。纯文本日志在这种情况下失去了大部分价值：日志系统无法在解析阶段把 `request_id`、`conversation_id`、`task_id` 等上下文从 message 字符串中可靠地拆出来，只能在消费端用正则二次提取，既容易出错又浪费性能，按字段过滤、聚合和告警的能力也随之丧失。全量 JSON 则把每个字段直接作为顶层键输出，日志系统开箱即可按字段建立索引，`request_id` 这类标识不再需要任何字符串解析。后续若引入自动异常检测或告警规则，结构化的 JSON 也是基本前提。
 
-在这种场景下，`[req=xxx]` 前缀的文本格式日志更加直观——grep `req=a1b2c3d4` 即可在一个文件中找出该请求的所有记录，grep 结果直接可读，不需要额外的 JSON 解析步骤。同时，结构化 JSON 格式会显著增加日志文件的体积（每条日志携带重复的 `"timestamp"`、`"level"`、`"logger"` 等字段名），在个人场景下这种冗余是不必要的。因此 ZRAG 选择文本格式日志 + `[req=xxx]` 前缀，保持轻量和可读性。
+全量 JSON 的代价是人工直接阅读原始日志不如纯文本直观，但这个代价在当前场景下很小：生产环境基本不会有人直接 `docker logs` 查看原始输出，需要查看时可以用 `jq` 或日志平台做格式化，而且 Docker 的 json-file driver 本身已经对每条日志做过一轮 JSON 包装，格式本身并不承担可读性职责。从实现维度看，全量 JSON 只需要一个 `JsonFormatter`，所有 handler 统一套用，不需要维护"哪些日志用文本、哪些日志用 JSON"的切换规则，改动集中且便于测试。
+
+因此 ZRAG 选择全量 JSON：每条日志固定携带 `timestamp`、`level`、`thread`、`logger`、`function`、`line`、`message` 七个基础字段，业务侧的标识与数值通过 `extra` 透出到 JSON 顶层。
+
+### JsonFormatter 的固定字段与 extra 透出
+
+`JsonFormatter` 继承 `logging.Formatter`，重写 `format()` 方法，把 `LogRecord` 序列化为单行 JSON 字符串。七个固定字段全部来自 `LogRecord` 的标准属性：`timestamp` 由 `record.created` 转换而来，`level` 取自 `record.levelname`，`thread` 取自 `record.thread`，`logger` 取自 `record.name`，`function` 取自 `record.funcName`，`line` 取自 `record.lineno`，`message` 取自 `record.getMessage()`。这组字段的取舍标准是"定位问题时所需的最少信息"：既要能回答"哪个模块、哪个函数、哪一行、什么级别"，又不能把 `LogRecord` 的全部属性无差别倾倒进日志。
+
+时间戳采用 ISO 8601 北京时间格式（UTC+8），通过 `datetime.fromtimestamp(record.created, tz=_CHINA_TZ).isoformat()` 生成，例如 `2026-06-18T18:30:00.123456+08:00`。选择带时区的 ISO 8601 而非 epoch 数值，是因为大多数日志系统原生支持该格式解析，人工阅读时也不需要换算，且时区信息被显式保留，不会在跨时区的采集链路中产生歧义。
+
+业务字段的透出方式是遍历 `record.__dict__`，排除 `logging.LogRecord` 的标准字段集合（`_STANDARD_FIELDS`）以及以下划线开头的内部键，剩下的键值即为调用方通过 `extra=` 传入的自定义字段，直接提升到 JSON 顶层。这一机制意味着 `JsonFormatter` 不需要预先声明任何 extra key 白名单，新增业务字段时格式化器无需改动。
+
+异常场景由 `exc_info` 驱动：当调用方使用 `logger.exception()` 时，`JsonFormatter` 在 JSON 中追加 `traceback` 字段，内容为完整格式化后的异常栈，而不是把栈信息拼进 `message`。此外，`json.dumps` 对不可序列化的值（如自定义对象）有兜底处理——逐个字段尝试序列化，失败的字段降级为 `str()`，保证日志写入本身不会因为数据类型问题抛出 `TypeError`。
+
+### 日志配置形态与文件分布
+
+在 Django 的 `LOGGING` 配置中，formatter 不再声明 `format` 字符串，而是通过 `'()'` 键直接指向 `JsonFormatter` 类，由 logging 配置系统负责实例化。四个文件 handler 与 console handler 共用同一个 formatter，保证写入文件和输出到 stdout 的日志结构完全一致，调试时只需要验证一种格式。每个文件 handler 通过各自的 `ExactLevelFilter` 和轮转参数完成级别分流与按天切分。
 
 ```python
 LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
     'formatters': {
         'verbose': {
-            'format': '%(asctime)s [%(levelname)s] %(thread)d '
-                      '%(funcName)s:%(lineno)d %(message)s',
+            '()': 'zrag.log_formatter.JsonFormatter',
         },
     },
+    'filters': {
+        'level_debug': {
+            '()': 'zrag.log_filter.ExactLevelFilter',
+            'level': 'DEBUG',
+        },
+        # level_info / level_warning / level_error 结构相同, 仅 level 不同
+    },
     'handlers': {
-        'console': { ... },           # stdout/stderr (Docker 日志驱动)
-        'file_debug': {               # debug.log, 按天轮转, 保留 7 天
-            'class': 'TimedRotatingFileHandler',
-            'filename': 'log/debug.log',
+        'console': {                  # stdout/stderr, 由 Docker json-file driver 采集
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+        'file_debug': {               # logs/debug.log, 按天轮转, 保留 7 天
+            'class': 'logging.handlers.TimedRotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs', 'debug.log'),
+            'when': 'D',
+            'interval': 1,
+            'backupCount': 7,
+            'encoding': 'utf-8',
+            'formatter': 'verbose',
             'filters': ['level_debug'],
         },
-        'file_info': { ... },         # info.log
-        'file_warning': { ... },      # warning.log
-        'file_error': { ... },        # error.log
+        # file_info / file_warning / file_error 结构相同, 仅级别与文件名不同
     },
 }
 ```
 
-日志文件分布：
+`BASE_DIR` 下的 `logs/` 目录是全部文件日志的落盘位置，各文件的职责划分如下：
 
 | 文件 | 级别 | 内容 |
 |------|------|------|
-| `debug.log` | DEBUG | SQL 查询、模块初始化详情 |
-| `info.log` | INFO | 业务节点完成日志（含 `[req=xxx]` 前缀） |
-| `warning.log` | WARNING | 可恢复异常 |
-| `error.log` | ERROR | 需关注的错误（含异常栈） |
-| `uwsgi.log` | — | uWSGI 进程日志 |
-| `uwsgi-req.log` | — | uWSGI HTTP 请求日志 |
+| `logs/debug.log` | DEBUG | SQL 查询、模块初始化详情 |
+| `logs/info.log` | INFO | 业务节点完成日志（JSON，含 `request_id` 字段） |
+| `logs/warning.log` | WARNING | 可恢复异常 |
+| `logs/error.log` | ERROR | 需关注的错误（含 `traceback` 字段） |
+| `logs/uwsgi.log` | — | uWSGI 进程日志 |
+| `logs/uwsgi-req.log` | — | uWSGI HTTP 请求日志 |
 
-业务节点日志遵循"只记录完成时间"的原则，在每个关键操作节点完成时记录：
+其中前四个文件由 Python logging 体系写入，全部为单行 JSON；后两个由 uWSGI 自身产生，不经过 `JsonFormatter`，其格式取决于 uWSGI 的配置。
+
+### 业务节点日志的书写方式
+
+业务节点日志遵循"只记录完成时间"的原则，在每个关键操作节点完成时记录一条 INFO 日志。由于日志已经是结构化格式，结构化标识不再嵌入 message 字符串，而是通过 `extra` 传入：message 只保留对排查有帮助的简短自然语言描述，可被过滤和聚合的 ID、名称、状态值统一放在 `extra` 中。`extra` 的 key 必须使用全拼 `snake_case`（如 `request_id` 而非 `req_id`），以保证日志系统中的字段名统一可读。
 
 ```python
-logger.info("[req=%s] 检索完成 conversation_id=%s results_count=%d", ...)
-logger.info("[req=%s] LLM 调用完成 conversation_id=%s reply_len=%d", ...)
-logger.info("[req=%s] 消息已保存 conversation_id=%s", ...)
+logger.info(
+    "检索完成",
+    extra={
+        "request_id": request_id,
+        "conversation_id": conversation_id,
+        "results_count": len(results),
+    },
+)
+logger.info(
+    "LLM 调用完成",
+    extra={
+        "request_id": request_id,
+        "conversation_id": conversation_id,
+        "reply_len": len(reply),
+    },
+)
+logger.info(
+    "消息已保存",
+    extra={"request_id": request_id, "conversation_id": conversation_id},
+)
 ```
 
-通过相邻日志的时间戳差值即可计算各节点的实际耗时，无需额外的耗时日志。
+这些调用产生的日志中，`request_id`、`conversation_id`、`results_count` 等字段会被 `JsonFormatter` 提升到 JSON 顶层，排查时可以直接按字段过滤，不需要解析 message。异常路径统一使用 `logger.exception()`，由格式化器自动附加 `traceback` 字段。通过相邻完成日志的 `timestamp` 差值即可计算各节点的实际耗时，无需额外的耗时日志。
 
 ---
 
@@ -3128,7 +3187,7 @@ ZRAG 通过抽象基类（ABC）+ 注册表（Registry）模式，在核心模�
 
 ABC（Abstract Base Class）定义接口契约——声明需要实现哪些方法以及这些方法的输入输出。Registry（注册表，一个 Python dict）建立类型标识符到具体实现类的映射。两者配合，使得新增一种实现只需两步：继承 ABC 并实现全部抽象方法，然后在注册表中添加一行映射。核心代码不需要任何修改——它只知道从注册表中按标识符查找类并实例化，不关心这个类是何时新增的、内部逻辑是什么。
 
-这种模式来源于 zonebank 项目中的实践经验。在 zonebank 中，弹性伸缩的各类策略（扩容策略、缩容策略、定时触发策略）均通过 ABC + Registry 模式管理——新增一种扩缩容策略时，开发者不需要修改策略引擎的核心调度代码，只需新建一个策略类并注册。ZRAG 将这一经过验证的模式复用到了文档摄入、分块策略和 LLM 集成的设计中。
+这种模式来源于内部参考项目中的实践经验。在该项目中，弹性伸缩的各类策略（扩容策略、缩容策略、定时触发策略）均通过 ABC + Registry 模式管理——新增一种扩缩容策略时，开发者不需要修改策略引擎的核心调度代码，只需新建一个策略类并注册。ZRAG 将这一经过验证的模式复用到了文档摄入、分块策略和 LLM 集成的设计中。
 
 从 SOLID 原则的角度看，ABC + Registry 实现了"对扩展开放，对修改封闭"。当需要支持新的数据源时，开发者在 `zrag/ingest/sources/` 目录下新建一个文件，实现 `DocumentSource` ABC 的 `fetch_batch()` 和 `source_type`，然后 `SOURCE_REGISTRY["new_source"] = NewSource`。IngestionPipeline 的代码完全不受影响。如果扩展需要改动 Pipeline 的核心代码（例如需要新增一个特殊的处理阶段），那就说明 ABC 的接口设计不够通用——这是需要在设计层面修正的信号，而非扩展者的操作问题。
 

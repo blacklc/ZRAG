@@ -1,6 +1,14 @@
 node_modules
 dist
+data/
 .env
+.env.*
+!.env.example
 .env.local
-*.log
+.vite
+*.local
 coverage
+*.log
+*.log.*
+logs/
+.DS_Store

@@ -36,7 +36,7 @@ Source 抽象基类设计将后续细化。
 
 **用户**: 采用 AppleScript 导出方式读取备忘录。
 
-**现有参考实现**: `/Users/lichen/Documents/workspace/AutoDocUpdater/.claude/skills/exporting-doc/scripts/doc_exporter.py`
+**现有参考实现**: 内部参考项目中的 `exporting-doc` 技能脚本 `doc_exporter.py`
 - 使用 `osascript` 调用 Notes APP 获取 `body of theNote`（返回 HTML）
 - 通过 `_html_to_markdown()` 方法用正则将 HTML 转为 Markdown，无外部依赖
 - 支持按文章名称、标签/文件夹筛选
@@ -140,7 +140,7 @@ RawDocument 是 Source 层和 Pipeline 之间的**统一合约**。不同数据�
 ## Q7: MacNotesSource 实现方案
 
 **决策**:
-- 将 `AutoDocUpdater` 中 `NotesExporter` 类的全部内容移植到 ZRAG 的 `MacNotesSource` 中作为实例方法
+- 将内部参考项目中 `NotesExporter` 类的全部内容移植到 ZRAG 的 `MacNotesSource` 中作为实例方法
 - `doc_exporter.py` 中有用的独立函数也移植为实例方法
 - 使用方式参考 `doc_exporter.py` 的 `main()` 方法
 

@@ -1,29 +1,101 @@
+# ============================================================
 # Python
+# ============================================================
 __pycache__/
-*.pyc
+*.py[cod]
+*.so
 *.egg-info/
-venv/
-.venv/
-
-# Data
-data/
-
-# Frontend
-node_modules/
+build/
 dist/
+.venv/
+.venv_test/
+venv/
+env/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
 
-# IDE
+# ============================================================
+# Django / 本地数据
+# 说明: /data/ 锚定根目录, 避免误伤源码中任意层级的 data 包;
+#       frontend/data 单独列出, 因前端曾生成 stray 数据库。
+# ============================================================
+/data/
+frontend/data/
+zrag/data/
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+media/
+staticfiles/
+chroma_db/
+/models/
+
+# ============================================================
+# 日志
+# 说明: 必须同时忽略 /logs/ 与 *.log.*。
+#       现有 *.log 规则不匹配 info.log.2026-11-10 这类轮转名,
+#       这是本次审查发现的 P0 漏洞根因。
+# ============================================================
+/logs/
+*.log
+*.log.*
+
+# ============================================================
+# 前端
+# ============================================================
+node_modules/
+.vite/
+*.local
+coverage/
+
+# ============================================================
+# 密钥与本地配置
+# 说明: 顺序不可颠倒, !.env.example 必须写在 .env.* 之后。
+#       .mcp.json 为 Claude Code 的 MCP server 配置, 与项目运行时无关,
+#       且含第三方 API Token, 一律不公开。
+# ============================================================
+.env
+.env.*
+!.env.example
+!.env.*.example
+.mcp.json
+.mcp.local.json
+*.pem
+*.key
+*.p12
+*.keystore
+id_rsa*
+id_ed25519*
+
+# ============================================================
+# 工具与 Claude Code
+# 说明: .claude/rules/ 已确认随项目公开, 因此不能整体忽略 .claude/,
+#       只忽略本机设置类文件。
+# ============================================================
+.claude/settings.json
+.claude/settings.local.json
+.claude/scheduled_tasks.*
+.claude/worktrees/
+.claude_tmp/
+.tmp/
+.skillopt-sleep/
 .idea/
 .vscode/
 
-# Environment
-.env
-
-# OS
+# ============================================================
+# 操作系统
+# ============================================================
 .DS_Store
+.DS_Store?
+._*
+.AppleDouble
 Thumbs.db
-
-# Django
-*.log
-staticfiles/
-.claude/worktrees/
+*.swp
+*~

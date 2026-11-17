@@ -131,13 +131,13 @@ class LLMProvider(ABC):
 
 **背景**: 用户使用自建 LiteLLM Gateway（`localhost:4000`），无需为每个 LLM 写单独 Provider。
 
-**LiteLLM Gateway 信息**（来自 `/Users/lichen/.claude/litellm/config.yaml`）:
+**LiteLLM Gateway 信息**（来自 `~/.config/litellm/config.yaml`）:
 
 | 配置项 | 值 |
 |--------|-----|
 | 地址 | `http://localhost:4000` |
 | API 协议 | OpenAI 兼容（`/v1/chat/completions`） |
-| Master Key | `sk-KTCqa...` |
+| Master Key | `<redacted>` |
 | 可用模型 | `smart-router`（负载均衡组）、`glm-5`、`kimi-k2.6`、`deepseek-v4-flash`、`minimax-m2.7`、`deepseek-v4-pro` |
 
 **实现方案**: 使用 OpenAI SDK（非 LangChain），与你 Q0 中"不使用 LangChain/LlamaIndex"的决策一致。

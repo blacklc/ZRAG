@@ -6,4 +6,4 @@ openai==2.40.0
 uwsgi==2.0.31
 PyYAML==6.0.3
 drf-spectacular==0.28.0
-jieba
+jieba==0.42.1
