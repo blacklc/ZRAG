@@ -45,6 +45,12 @@ jobs:
           # pytest-django 会读取 pytest.ini 中的 DJANGO_SETTINGS_MODULE 并完成 Django 初始化。
           pip install pytest pytest-django
 
+      # zrag/settings.py 的日志 handler 指向 logs/debug.log 等文件, 但 logs/ 被 .gitignore
+      # 排除, CI 中检出后并不存在该目录, 因此需要预先创建, 否则 Django 初始化日志配置时会抛
+      # FileNotFoundError: No such file or directory: '.../logs/debug.log'.
+      - name: 创建日志目录
+        run: mkdir -p logs
+
       - name: Run backend tests
         # tests/test_08_bge_embedder.py 会通过 sentence-transformers 实际加载
         # BAAI/bge-small-zh-v1.5 模型 (缓存目录默认位于宿主机的 ./models), CI 环境中不存在,

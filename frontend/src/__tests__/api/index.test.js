@@ -52,6 +52,7 @@ describe('apiGet', () => {
         Promise.resolve(
           JSON.stringify({ Data: mockBody, Message: 'ok', ErrorCode: '' }),
         ),
+      headers: { get: () => null },
     })
     globalThis.fetch = mockFetch
 
@@ -61,6 +62,8 @@ describe('apiGet', () => {
     expect(mockFetch).toHaveBeenCalledWith('/zrag/v1/conversations', {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
+      // request() 始终注入 AbortController 的 signal 用于超时控制
+      signal: expect.any(AbortSignal),
     })
     expect(result).toEqual(mockBody)
   })
@@ -69,6 +72,7 @@ describe('apiGet', () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       text: () => Promise.resolve(JSON.stringify({ Data: null })),
+      headers: { get: () => null },
     })
     globalThis.fetch = mockFetch
 
@@ -82,6 +86,7 @@ describe('apiGet', () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       text: () => Promise.resolve(JSON.stringify({ Message: 'no data' })),
+      headers: { get: () => null },
     })
     globalThis.fetch = mockFetch
 
@@ -101,6 +106,7 @@ describe('apiPost', () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       text: () => Promise.resolve(JSON.stringify({ Data: { id: 'new' } })),
+      headers: { get: () => null },
     })
     globalThis.fetch = mockFetch
 
@@ -112,6 +118,7 @@ describe('apiPost', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: expect.any(AbortSignal),
     })
     expect(result).toEqual({ id: 'new' })
   })
@@ -120,6 +127,7 @@ describe('apiPost', () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       text: () => Promise.resolve(JSON.stringify({ Data: null })),
+      headers: { get: () => null },
     })
     globalThis.fetch = mockFetch
 
@@ -140,6 +148,7 @@ describe('apiDelete', () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       text: () => Promise.resolve(JSON.stringify({ Data: null })),
+      headers: { get: () => null },
     })
     globalThis.fetch = mockFetch
 
@@ -149,6 +158,7 @@ describe('apiDelete', () => {
     expect(mockFetch).toHaveBeenCalledWith('/zrag/v1/conversations/conv-1', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
+      signal: expect.any(AbortSignal),
     })
     expect(result).toBeNull()
   })
@@ -165,6 +175,7 @@ describe('API Key 鉴权头', () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       text: () => Promise.resolve(JSON.stringify({ Data: {} })),
+      headers: { get: () => null },
     })
     globalThis.fetch = mockFetch
 
@@ -177,6 +188,7 @@ describe('API Key 鉴权头', () => {
         'Content-Type': 'application/json',
         Authorization: 'Bearer test-key-value',
       },
+      signal: expect.any(AbortSignal),
     })
 
     vi.unstubAllEnvs()
@@ -192,6 +204,7 @@ describe('非 JSON 响应', () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       text: () => Promise.resolve('not a json string'),
+      headers: { get: () => null },
     })
     globalThis.fetch = mockFetch
 
@@ -205,6 +218,7 @@ describe('非 JSON 响应', () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       text: () => Promise.resolve(''),
+      headers: { get: () => null },
     })
     globalThis.fetch = mockFetch
 
@@ -231,6 +245,7 @@ describe('HTTP 错误响应', () => {
             Message: 'Access denied',
           }),
         ),
+      headers: { get: () => null },
     })
     globalThis.fetch = mockFetch
 
@@ -249,6 +264,7 @@ describe('HTTP 错误响应', () => {
       ok: false,
       status: 500,
       text: () => Promise.resolve(''),
+      headers: { get: () => null },
     })
     globalThis.fetch = mockFetch
 
@@ -266,6 +282,7 @@ describe('HTTP 错误响应', () => {
       ok: false,
       status: 404,
       text: () => Promise.resolve(JSON.stringify({})),
+      headers: { get: () => null },
     })
     globalThis.fetch = mockFetch
 
@@ -292,6 +309,7 @@ describe('标准 APIResponse 封装', () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       text: () => Promise.resolve(JSON.stringify(apiResponse)),
+      headers: { get: () => null },
     })
     globalThis.fetch = mockFetch
 
